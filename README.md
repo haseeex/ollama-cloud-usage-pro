@@ -9,11 +9,22 @@ View [Ollama Cloud](https://ollama.com) usage and limits in VS Code — a compac
   - 🟡 yellow at 60%+
   - 🔴 red at 80%+
 - **Usage panel** — double-click the status bar to open a detailed panel with:
-  - Session and weekly usage progress bars
+  - Session and weekly usage progress bars with reset countdown
   - Models used this session / week with request counts
+  - Multi-account support: switch, add, remove accounts via dropdown
   - Refresh, set API key, and clear key actions
 - **Auto-refresh** — usage reloads every 5 minutes to avoid rate limits.
-- **Secure storage** — API key stored in VS Code Secret Storage (or `OLLAMA_API_KEY` env var).
+- **Secure storage** — API keys stored in VS Code Secret Storage (or `OLLAMA_API_KEY` env var).
+
+## Screenshots
+
+### Usage Panel
+
+![Usage Panel](resources/screenshot-panel.png)
+
+### Status Bar
+
+![Status Bar](resources/screenshot-statusbar.png)
 
 ## Use
 
