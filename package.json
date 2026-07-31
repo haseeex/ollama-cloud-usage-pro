@@ -2,7 +2,7 @@
   "name": "ollama-cloud-usage",
   "displayName": "Ollama Cloud Usage",
   "description": "View Ollama Cloud usage and limits in VS Code.",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "publisher": "ollama-cloud-usage",
   "author": {
     "name": "LongNH94",
