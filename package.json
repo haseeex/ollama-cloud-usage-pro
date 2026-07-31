@@ -1,0 +1,73 @@
+{
+  "name": "ollama-cloud-usage",
+  "displayName": "Ollama Cloud Usage",
+  "description": "View Ollama Cloud usage and limits in VS Code.",
+  "version": "0.0.1",
+  "publisher": "longnh0411",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/longnh0411/vscode-ollama-usage.git"
+  },
+  "bugs": {
+    "url": "https://github.com/longnh0411/vscode-ollama-usage/issues"
+  },
+  "homepage": "https://github.com/longnh0411/vscode-ollama-usage#readme",
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "ollama",
+    "ollama-cloud",
+    "usage",
+    "quota",
+    "monitoring"
+  ],
+  "icon": "resources/ollama-cloud.png",
+  "galleryBanner": {
+    "color": "#1e1e1e",
+    "theme": "dark"
+  },
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "ollamaCloud.refresh",
+        "title": "Ollama Cloud: Refresh Usage",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "ollamaCloud.setApiKey",
+        "title": "Ollama Cloud: Set API Key",
+        "icon": "$(key)"
+      },
+      {
+        "command": "ollamaCloud.clearApiKey",
+        "title": "Ollama Cloud: Clear Stored API Key",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "ollamaCloud.openPanel",
+        "title": "Ollama Cloud: Open Usage Panel",
+        "icon": "$(layout-sidebar-left)"
+      }
+    ],
+    "menus": {}
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "test": "npm run compile && node --test out/api.test.js"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/vscode": "^1.95.0",
+    "typescript": "^5.7.2"
+  }
+}
