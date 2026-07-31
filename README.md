@@ -20,11 +20,11 @@ View [Ollama Cloud](https://ollama.com) usage and limits in VS Code — a compac
 
 ### Usage Panel
 
-![Usage Panel](resources/screenshot-panel.png)
+![Usage Panel](https://raw.githubusercontent.com/longnh0411/ollama-cloud-usage/main/resources/screenshot-panel.png)
 
 ### Status Bar
 
-![Status Bar](resources/screenshot-statusbar.png)
+![Status Bar](https://raw.githubusercontent.com/longnh0411/ollama-cloud-usage/main/resources/screenshot-statusbar.png)
 
 ## Use
 
