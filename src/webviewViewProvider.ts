@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { UsageResponse } from './api';
+import { AccountsState } from './accountStore';
 
 function hexFor(percent: number): string {
   if (percent >= 80) {
@@ -20,7 +21,7 @@ function barHtml(percent: number): string {
   return `<div class="bar"><div class="fill" style="width:${percent}%;background:${color}"></div></div>`;
 }
 
-function rowHtml(label: string, percent: number, usage: number): string {
+function rowHtml(label: string, percent: number, usage: number, resetType: string): string {
   const color = hexFor(percent);
   return `<div class="row">
     <div class="row-head">
@@ -28,6 +29,7 @@ function rowHtml(label: string, percent: number, usage: number): string {
       <span class="row-pct" style="color:${color}">${pct(usage)}% used</span>
     </div>
     ${barHtml(percent)}
+    <div class="reset">Resets in <span data-reset="${resetType}">…</span>.</div>
   </div>`;
 }
 
@@ -45,34 +47,50 @@ function modelListHtml(models: UsageResponse['limits']['weekly']['models']): str
   ).join('');
 }
 
-function bodyHtml(usage: UsageResponse | undefined, error: string | undefined, loading: boolean): string {
+function accountsHtml(state: AccountsState): string {
+  const opts = state.accounts.map((a) =>
+    `<option value="${a.id}" ${a.id === state.activeId ? 'selected' : ''}>${escapeHtml(a.label)}</option>`,
+  ).join('');
+  return `<div class="accounts">
+    <select class="account-select" data-cmd="switchAccount">${opts}</select>
+    <button class="icon-btn" data-cmd="addAccount" title="Add account">＋</button>
+    <button class="icon-btn" data-cmd="removeAccount" title="Remove account" ${state.accounts.length ? '' : 'disabled'}>－</button>
+  </div>`;
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
+}
+
+function bodyHtml(usage: UsageResponse | undefined, error: string | undefined, loading: boolean, accounts: AccountsState): string {
+  const toolbar = `<div class="toolbar">
+    <h2>☁ Cloud usage</h2>
+    <div class="actions">
+      <button class="icon-btn" data-cmd="refresh" title="Refresh">⟳</button>
+    </div>
+  </div>
+  ${accountsHtml(accounts)}`;
+
   if (loading) {
-    return `<div class="state">Loading Ollama usage…</div>`;
+    return `${toolbar}<div class="state">Loading Ollama usage…</div>`;
   }
   if (error) {
-    return `<div class="state error">⚠ ${error}</div>
-      <button class="btn" data-cmd="setApiKey">Set API Key</button>`;
+    return `${toolbar}<div class="state error">⚠ ${escapeHtml(error)}</div>
+      <button class="btn" data-cmd="addAccount">Add API Key</button>`;
   }
   if (!usage) {
-    return '<div class="state">No data.</div>';
+    return `${toolbar}<div class="state">No data.</div>`;
   }
   const sp = pct(usage.limits.session.usage);
   const wp = pct(usage.limits.weekly.usage);
-  return `<div class="toolbar">
-      <h2>☁ Cloud usage</h2>
-      <div class="actions">
-        <button class="icon-btn" data-cmd="refresh" title="Refresh">⟳</button>
-        <button class="icon-btn" data-cmd="setApiKey" title="Set API Key">🔑</button>
-        <button class="icon-btn" data-cmd="clearApiKey" title="Clear API Key">🗑</button>
-      </div>
-    </div>
-    ${rowHtml('Session usage', sp, usage.limits.session.usage)}
+  return `${toolbar}
+    ${rowHtml('Session usage', sp, usage.limits.session.usage, 'session')}
     <div class="group">
       <div class="group-label">Models used this session</div>
       <div class="models">${modelListHtml(usage.limits.session.models)}</div>
     </div>
     <div class="spacer"></div>
-    ${rowHtml('Weekly usage', wp, usage.limits.weekly.usage)}
+    ${rowHtml('Weekly usage', wp, usage.limits.weekly.usage, 'weekly')}
     <div class="group">
       <div class="group-label">Models used this week</div>
       <div class="models">${modelListHtml(usage.limits.weekly.models)}</div>
@@ -81,16 +99,20 @@ function bodyHtml(usage: UsageResponse | undefined, error: string | undefined, l
 
 const CSS = `
   body { font-family: var(--vscode-font-family); padding: 20px; color: var(--vscode-foreground); margin: 0; max-width: 480px; }
-  .toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px; }
+  .toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
   .toolbar h2 { margin: 0; }
   .actions { display: flex; gap: 4px; }
   .icon-btn { background: none; border: none; cursor: pointer; font-size: 15px; padding: 4px 6px; border-radius: 4px; color: var(--vscode-foreground); opacity: 0.7; line-height: 1; }
   .icon-btn:hover { opacity: 1; background: var(--vscode-toolbar-hoverBackground); }
+  .icon-btn:disabled { opacity: 0.3; cursor: default; }
+  .accounts { display: flex; align-items: center; gap: 8px; margin-bottom: 18px; }
+  .account-select { flex: 1; font-family: var(--vscode-font-family); font-size: 12px; padding: 4px 8px; background: var(--vscode-dropdown-background); color: var(--vscode-dropdown-foreground); border: 1px solid var(--vscode-dropdown-border); border-radius: 4px; }
   h2 { font-size: 14px; font-weight: 600; margin: 0 0 18px 0; }
   .row { margin-bottom: 16px; }
   .row-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
   .row-label { font-size: 13px; font-weight: 500; }
   .row-pct { font-size: 12px; font-weight: 600; }
+  .reset { font-size: 11px; color: var(--vscode-descriptionForeground); margin-top: 4px; font-variant-numeric: tabular-nums; }
   .bar { background: var(--vscode-scrollbarSlider-background); border-radius: 6px; height: 6px; overflow: hidden; }
   .fill { height: 6px; border-radius: 6px; transition: width .3s ease; }
   .group { margin-top: 20px; }
@@ -110,10 +132,10 @@ const CSS = `
 export class UsagePanel {
   private panel: vscode.WebviewPanel | undefined;
 
-  show(usage: UsageResponse | undefined, error: string | undefined, loading: boolean): void {
+  show(usage: UsageResponse | undefined, error: string | undefined, loading: boolean, accounts: AccountsState): void {
     if (this.panel) {
       this.panel.reveal();
-      this.render(usage, error, loading);
+      this.render(usage, error, loading, accounts);
       return;
     }
     this.panel = vscode.window.createWebviewPanel(
@@ -123,30 +145,75 @@ export class UsagePanel {
       { enableScripts: true, retainContextWhenHidden: true },
     );
     this.panel.webview.onDidReceiveMessage((msg) => {
-      if (msg.cmd === 'setApiKey') {
-        void vscode.commands.executeCommand('ollamaCloud.setApiKey');
-      } else if (msg.cmd === 'refresh') {
+      if (msg.cmd === 'refresh') {
         void vscode.commands.executeCommand('ollamaCloud.refresh');
-      } else if (msg.cmd === 'clearApiKey') {
-        void vscode.commands.executeCommand('ollamaCloud.clearApiKey');
+      } else if (msg.cmd === 'addAccount') {
+        void vscode.commands.executeCommand('ollamaCloud.addAccount');
+      } else if (msg.cmd === 'removeAccount') {
+        void vscode.commands.executeCommand('ollamaCloud.removeAccount');
+      } else if (msg.cmd === 'switchAccount') {
+        void vscode.commands.executeCommand('ollamaCloud.switchAccount', msg.id);
       }
     });
     this.panel.onDidDispose(() => { this.panel = undefined; });
-    this.render(usage, error, loading);
+    this.render(usage, error, loading, accounts);
   }
 
-  render(usage: UsageResponse | undefined, error: string | undefined, loading: boolean): void {
+  render(usage: UsageResponse | undefined, error: string | undefined, loading: boolean, accounts: AccountsState): void {
     if (!this.panel) {
       return;
     }
     const script = `<script>
       const vscode = acquireVsCodeApi();
       document.body.addEventListener('click', (e) => {
-        const btn = e.target.closest('[data-cmd]');
+        const btn = e.target.closest('button[data-cmd]');
         if (btn) { vscode.postMessage({ cmd: btn.dataset.cmd }); }
       });
+      const sel = document.querySelector('select[data-cmd]');
+      if (sel) { sel.addEventListener('change', (e) => { vscode.postMessage({ cmd: 'switchAccount', id: e.target.value }); }); }
+
+      function nextSessionReset() {
+        const now = new Date();
+        const ms = now.getTime();
+        const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0).getTime();
+        const slots = [];
+        for (let h = 2; h < 24; h += 5) { slots.push(dayStart + h * 3600000); }
+        slots.push(dayStart + 24 * 3600000);
+        let next = slots.find(s => s > ms);
+        if (next === undefined) { next = dayStart + 24 * 3600000; }
+        return next;
+      }
+      function nextWeeklyReset() {
+        const now = new Date();
+        const d = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 7, 0, 0);
+        const dow = d.getDay();
+        const diff = (8 - dow) % 7;
+        d.setDate(d.getDate() + diff);
+        if (d.getTime() <= now.getTime()) { d.setDate(d.getDate() + 7); }
+        return d.getTime();
+      }
+      function format(ms) {
+        const s = Math.round(ms / 1000);
+        const m = Math.floor(s / 60);
+        const h = Math.floor(m / 60);
+        const days = Math.floor(h / 24);
+        if (days >= 1) { return days + ' day' + (days > 1 ? 's' : ''); }
+        if (h >= 1) { return h + ' hour' + (h > 1 ? 's' : '') + (m % 60 ? ' ' + (m % 60) + ' min' : ''); }
+        if (m >= 1) { return m + ' minute' + (m > 1 ? 's' : ''); }
+        return s + ' second' + (s > 1 ? 's' : '');
+      }
+      function tick() {
+        const now = Date.now();
+        document.querySelectorAll('[data-reset]').forEach(el => {
+          const type = el.dataset.reset;
+          const reset = type === 'session' ? nextSessionReset() : nextWeeklyReset();
+          el.textContent = format(reset - now);
+        });
+      }
+      tick();
+      setInterval(tick, 1000);
     </script>`;
     this.panel.webview.html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>${CSS}</style></head>
-      <body>${bodyHtml(usage, error, loading)}${script}</body></html>`;
+      <body>${bodyHtml(usage, error, loading, accounts)}${script}</body></html>`;
   }
 }

@@ -2,8 +2,12 @@
   "name": "ollama-cloud-usage",
   "displayName": "Ollama Cloud Usage",
   "description": "View Ollama Cloud usage and limits in VS Code.",
-  "version": "0.0.1",
-  "publisher": "longnh0411",
+  "version": "1.0.0",
+  "publisher": "ollama-cloud-usage",
+  "author": {
+    "name": "LongNH94",
+    "email": "longnh94@fpt.com"
+  },
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -43,13 +47,13 @@
         "icon": "$(refresh)"
       },
       {
-        "command": "ollamaCloud.setApiKey",
-        "title": "Ollama Cloud: Set API Key",
-        "icon": "$(key)"
+        "command": "ollamaCloud.addAccount",
+        "title": "Ollama Cloud: Add Account",
+        "icon": "$(add)"
       },
       {
-        "command": "ollamaCloud.clearApiKey",
-        "title": "Ollama Cloud: Clear Stored API Key",
+        "command": "ollamaCloud.removeAccount",
+        "title": "Ollama Cloud: Remove Account",
         "icon": "$(trash)"
       },
       {

@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { fetchUsage, LimitUsage, ModelUsage, UsageResponse } from './api';
+import { AccountStore, AccountsState } from './accountStore';
 
 type UsageNode = {
   label: string;
@@ -103,6 +104,7 @@ export interface DataUpdate {
   usage: UsageResponse | undefined;
   error: string | undefined;
   loading: boolean;
+  accounts: AccountsState;
 }
 
 function backgroundFor(percent: number): vscode.ThemeColor | undefined {
@@ -135,19 +137,60 @@ function bar(length: number, percent: number): string {
   return `<span style="color:${color}">${'█'.repeat(filled)}</span><span style="color:#6e6e6e">${'░'.repeat(length - filled)}</span>`;
 }
 
+function nextSessionResetMs(now: Date): number {
+  const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0).getTime();
+  for (let h = 2; h < 24; h += 5) {
+    const slot = dayStart + h * 3600_000;
+    if (slot > now.getTime()) {
+      return slot;
+    }
+  }
+  return dayStart + 24 * 3600_000;
+}
+
+function nextWeeklyResetMs(now: Date): number {
+  const d = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 7, 0, 0);
+  const diff = (8 - d.getDay()) % 7;
+  d.setDate(d.getDate() + diff);
+  if (d.getTime() <= now.getTime()) {
+    d.setDate(d.getDate() + 7);
+  }
+  return d.getTime();
+}
+
+function formatReset(ms: number): string {
+  const s = Math.round(ms / 1000);
+  const m = Math.floor(s / 60);
+  const h = Math.floor(m / 60);
+  const days = Math.floor(h / 24);
+  if (days >= 1) {
+    return `${days} day${days > 1 ? 's' : ''}`;
+  }
+  if (h >= 1) {
+    return `${h} hour${h > 1 ? 's' : ''}${m % 60 ? ` ${m % 60} min` : ''}`;
+  }
+  if (m >= 1) {
+    return `${m} minute${m > 1 ? 's' : ''}`;
+  }
+  return `${s} second${s > 1 ? 's' : ''}`;
+}
+
 function quotaTooltip(usage: UsageResponse): vscode.MarkdownString {
   const sp = Math.round(usage.limits.session.usage * 100);
   const wp = Math.round(usage.limits.weekly.usage * 100);
   const sColor = hexFor(sp);
   const wColor = hexFor(wp);
+  const now = new Date();
+  const sReset = formatReset(nextSessionResetMs(now) - now.getTime());
+  const wReset = formatReset(nextWeeklyResetMs(now) - now.getTime());
   const md = new vscode.MarkdownString();
   md.isTrusted = true;
   md.supportHtml = true;
   md.supportThemeIcons = true;
   md.appendMarkdown(`### $(dashboard) Quota\n\n`);
   md.appendMarkdown(`| Window | Share | Reset |\n|:--|:--|:--|\n`);
-  md.appendMarkdown(`| 5 hour | ${bar(18, sp)} <font color="${sColor}">**${formatPercent(usage.limits.session.usage)}**</font> | — |\n`);
-  md.appendMarkdown(`| Week | ${bar(18, wp)} <font color="${wColor}">**${formatPercent(usage.limits.weekly.usage)}**</font> | — |\n\n`);
+  md.appendMarkdown(`| 5 hour | ${bar(18, sp)} <font color="${sColor}">**${formatPercent(usage.limits.session.usage)}**</font> | ${sReset} |\n`);
+  md.appendMarkdown(`| Week | ${bar(18, wp)} <font color="${wColor}">**${formatPercent(usage.limits.weekly.usage)}**</font> | ${wReset} |\n\n`);
   md.appendMarkdown(`*Click to refresh.*`);
   return md;
 }
@@ -162,11 +205,17 @@ export class UsageTreeProvider implements vscode.TreeDataProvider<UsageTreeItem>
   private usage: UsageResponse | undefined;
   private error: string | undefined;
   private loading = false;
+  private accountsState: AccountsState = { accounts: [] };
 
-  constructor(private readonly secrets: vscode.SecretStorage) {}
+  constructor(private readonly store: AccountStore) {}
 
   getData(): DataUpdate {
-    return { usage: this.usage, error: this.error, loading: this.loading };
+    return { usage: this.usage, error: this.error, loading: this.loading, accounts: this.accountsState };
+  }
+
+  async getAccounts(): Promise<AccountsState> {
+    this.accountsState = await this.store.load();
+    return this.accountsState;
   }
 
   getTreeItem(element: UsageTreeItem): vscode.TreeItem {
@@ -202,10 +251,12 @@ export class UsageTreeProvider implements vscode.TreeDataProvider<UsageTreeItem>
     this.error = undefined;
     this.onDidChangeTreeDataEmitter.fire(undefined);
     this.onDidChangeStatusEmitter.fire({ text: '$(loading~spin) Ollama', tooltip: 'Loading Ollama usage…' });
-    this.onDidChangeDataEmitter.fire({ usage: this.usage, error: this.error, loading: true });
+    this.accountsState = await this.store.load();
+    this.onDidChangeDataEmitter.fire({ usage: this.usage, error: this.error, loading: true, accounts: this.accountsState });
 
     try {
-      const apiKey = await this.secrets.get('ollamaCloud.apiKey') ?? process.env.OLLAMA_API_KEY;
+      const active = await this.store.getActive();
+      const apiKey = active?.key ?? process.env.OLLAMA_API_KEY;
       if (!apiKey) {
         throw new Error('No Ollama API key found.');
       }
@@ -233,7 +284,7 @@ export class UsageTreeProvider implements vscode.TreeDataProvider<UsageTreeItem>
     } finally {
       this.loading = false;
       this.onDidChangeTreeDataEmitter.fire(undefined);
-      this.onDidChangeDataEmitter.fire({ usage: this.usage, error: this.error, loading: this.loading });
+      this.onDidChangeDataEmitter.fire({ usage: this.usage, error: this.error, loading: this.loading, accounts: this.accountsState });
     }
   }
 }
