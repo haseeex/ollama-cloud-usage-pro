@@ -3,6 +3,7 @@ import * as crypto from 'node:crypto';
 
 const ACCOUNTS_KEY = 'ollamaCloud.accounts';
 const LEGACY_KEY = 'ollamaCloud.apiKey';
+const SESSION_WINDOW_MS = 5 * 60 * 60 * 1000;
 
 export interface Account {
   id: string;
@@ -89,5 +90,17 @@ export class AccountStore {
   async getActive(): Promise<ActiveAccount | undefined> {
     const state = await this.load();
     return state.accounts.find((a) => a.id === state.activeId);
+  }
+
+  // Session resets every 5h, anchored to today's 11:00 (the observed reset).
+  // Rolling window: next reset = 11:00 today, then every +5h.
+  async getSessionResetMs(): Promise<number> {
+    const now = new Date();
+    const base = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 11, 0, 0).getTime();
+    let next = base;
+    while (next <= now.getTime()) {
+      next += SESSION_WINDOW_MS;
+    }
+    return next;
   }
 }

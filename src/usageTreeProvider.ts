@@ -105,6 +105,7 @@ export interface DataUpdate {
   error: string | undefined;
   loading: boolean;
   accounts: AccountsState;
+  sessionResetMs: number;
 }
 
 function backgroundFor(percent: number): vscode.ThemeColor | undefined {
@@ -137,15 +138,16 @@ function bar(length: number, percent: number): string {
   return `<span style="color:${color}">${'█'.repeat(filled)}</span><span style="color:#6e6e6e">${'░'.repeat(length - filled)}</span>`;
 }
 
-function nextSessionResetMs(now: Date): number {
-  const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0).getTime();
-  for (let h = 2; h < 24; h += 5) {
-    const slot = dayStart + h * 3600_000;
-    if (slot > now.getTime()) {
-      return slot;
-    }
+function nextSessionResetMs(now: Date, baseMs: number): number {
+  const nowMs = now.getTime();
+  if (!baseMs) {
+    return 0;
   }
-  return dayStart + 24 * 3600_000;
+  let base = baseMs;
+  while (base <= nowMs) {
+    base += 5 * 3600_000;
+  }
+  return base;
 }
 
 function nextWeeklyResetMs(now: Date): number {
@@ -175,13 +177,13 @@ function formatReset(ms: number): string {
   return `${s} second${s > 1 ? 's' : ''}`;
 }
 
-function quotaTooltip(usage: UsageResponse): vscode.MarkdownString {
+function quotaTooltip(usage: UsageResponse, sessionResetMs: number): vscode.MarkdownString {
   const sp = Math.round(usage.limits.session.usage * 100);
   const wp = Math.round(usage.limits.weekly.usage * 100);
   const sColor = hexFor(sp);
   const wColor = hexFor(wp);
   const now = new Date();
-  const sReset = formatReset(nextSessionResetMs(now) - now.getTime());
+  const sReset = sessionResetMs ? formatReset(sessionResetMs - now.getTime()) : '—';
   const wReset = formatReset(nextWeeklyResetMs(now) - now.getTime());
   const md = new vscode.MarkdownString();
   md.isTrusted = true;
@@ -206,11 +208,12 @@ export class UsageTreeProvider implements vscode.TreeDataProvider<UsageTreeItem>
   private error: string | undefined;
   private loading = false;
   private accountsState: AccountsState = { accounts: [] };
+  private sessionResetMs = 0;
 
   constructor(private readonly store: AccountStore) {}
 
   getData(): DataUpdate {
-    return { usage: this.usage, error: this.error, loading: this.loading, accounts: this.accountsState };
+    return { usage: this.usage, error: this.error, loading: this.loading, accounts: this.accountsState, sessionResetMs: this.sessionResetMs };
   }
 
   async getAccounts(): Promise<AccountsState> {
@@ -252,7 +255,8 @@ export class UsageTreeProvider implements vscode.TreeDataProvider<UsageTreeItem>
     this.onDidChangeTreeDataEmitter.fire(undefined);
     this.onDidChangeStatusEmitter.fire({ text: '$(loading~spin) Ollama', tooltip: 'Loading Ollama usage…' });
     this.accountsState = await this.store.load();
-    this.onDidChangeDataEmitter.fire({ usage: this.usage, error: this.error, loading: true, accounts: this.accountsState });
+    this.sessionResetMs = await this.store.getSessionResetMs();
+    this.onDidChangeDataEmitter.fire({ usage: this.usage, error: this.error, loading: true, accounts: this.accountsState, sessionResetMs: this.sessionResetMs });
 
     try {
       const active = await this.store.getActive();
@@ -266,7 +270,7 @@ export class UsageTreeProvider implements vscode.TreeDataProvider<UsageTreeItem>
       const worst = Math.max(sessionPct, weeklyPct);
       this.onDidChangeStatusEmitter.fire({
         text: `$(dashboard) 5H:${sessionPct}% W:${weeklyPct}%`,
-        tooltip: quotaTooltip(this.usage),
+        tooltip: quotaTooltip(this.usage, this.sessionResetMs),
         backgroundColor: backgroundFor(worst),
       });
     } catch (error) {
@@ -284,7 +288,7 @@ export class UsageTreeProvider implements vscode.TreeDataProvider<UsageTreeItem>
     } finally {
       this.loading = false;
       this.onDidChangeTreeDataEmitter.fire(undefined);
-      this.onDidChangeDataEmitter.fire({ usage: this.usage, error: this.error, loading: this.loading, accounts: this.accountsState });
+      this.onDidChangeDataEmitter.fire({ usage: this.usage, error: this.error, loading: this.loading, accounts: this.accountsState, sessionResetMs: this.sessionResetMs });
     }
   }
 }

@@ -21,7 +21,7 @@ function barHtml(percent: number): string {
   return `<div class="bar"><div class="fill" style="width:${percent}%;background:${color}"></div></div>`;
 }
 
-function rowHtml(label: string, percent: number, usage: number, resetType: string): string {
+function rowHtml(label: string, percent: number, usage: number, resetType: string, extra = ''): string {
   const color = hexFor(percent);
   return `<div class="row">
     <div class="row-head">
@@ -29,7 +29,7 @@ function rowHtml(label: string, percent: number, usage: number, resetType: strin
       <span class="row-pct" style="color:${color}">${pct(usage)}% used</span>
     </div>
     ${barHtml(percent)}
-    <div class="reset">Resets in <span data-reset="${resetType}">…</span>.</div>
+    <div class="reset">Resets in <span data-reset="${resetType}"${extra}>…</span>.</div>
   </div>`;
 }
 
@@ -62,7 +62,7 @@ function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
 }
 
-function bodyHtml(usage: UsageResponse | undefined, error: string | undefined, loading: boolean, accounts: AccountsState): string {
+function bodyHtml(usage: UsageResponse | undefined, error: string | undefined, loading: boolean, accounts: AccountsState, sessionResetMs: number): string {
   const toolbar = `<div class="toolbar">
     <h2>☁ Cloud usage</h2>
     <div class="actions">
@@ -83,8 +83,9 @@ function bodyHtml(usage: UsageResponse | undefined, error: string | undefined, l
   }
   const sp = pct(usage.limits.session.usage);
   const wp = pct(usage.limits.weekly.usage);
+  const sResetAttr = sessionResetMs ? ` data-session-base="${sessionResetMs}"` : '';
   return `${toolbar}
-    ${rowHtml('Session usage', sp, usage.limits.session.usage, 'session')}
+    ${rowHtml('Session usage', sp, usage.limits.session.usage, 'session', sResetAttr)}
     <div class="group">
       <div class="group-label">Models used this session</div>
       <div class="models">${modelListHtml(usage.limits.session.models)}</div>
@@ -132,10 +133,10 @@ const CSS = `
 export class UsagePanel {
   private panel: vscode.WebviewPanel | undefined;
 
-  show(usage: UsageResponse | undefined, error: string | undefined, loading: boolean, accounts: AccountsState): void {
+  show(usage: UsageResponse | undefined, error: string | undefined, loading: boolean, accounts: AccountsState, sessionResetMs: number): void {
     if (this.panel) {
       this.panel.reveal();
-      this.render(usage, error, loading, accounts);
+      this.render(usage, error, loading, accounts, sessionResetMs);
       return;
     }
     this.panel = vscode.window.createWebviewPanel(
@@ -156,10 +157,10 @@ export class UsagePanel {
       }
     });
     this.panel.onDidDispose(() => { this.panel = undefined; });
-    this.render(usage, error, loading, accounts);
+    this.render(usage, error, loading, accounts, sessionResetMs);
   }
 
-  render(usage: UsageResponse | undefined, error: string | undefined, loading: boolean, accounts: AccountsState): void {
+  render(usage: UsageResponse | undefined, error: string | undefined, loading: boolean, accounts: AccountsState, sessionResetMs: number): void {
     if (!this.panel) {
       return;
     }
@@ -172,17 +173,6 @@ export class UsagePanel {
       const sel = document.querySelector('select[data-cmd]');
       if (sel) { sel.addEventListener('change', (e) => { vscode.postMessage({ cmd: 'switchAccount', id: e.target.value }); }); }
 
-      function nextSessionReset() {
-        const now = new Date();
-        const ms = now.getTime();
-        const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0).getTime();
-        const slots = [];
-        for (let h = 2; h < 24; h += 5) { slots.push(dayStart + h * 3600000); }
-        slots.push(dayStart + 24 * 3600000);
-        let next = slots.find(s => s > ms);
-        if (next === undefined) { next = dayStart + 24 * 3600000; }
-        return next;
-      }
       function nextWeeklyReset() {
         const now = new Date();
         const d = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 7, 0, 0);
@@ -206,14 +196,20 @@ export class UsagePanel {
         const now = Date.now();
         document.querySelectorAll('[data-reset]').forEach(el => {
           const type = el.dataset.reset;
-          const reset = type === 'session' ? nextSessionReset() : nextWeeklyReset();
-          el.textContent = format(reset - now);
+          if (type === 'session') {
+            let base = Number(el.dataset.sessionBase || 0);
+            if (!base) { el.textContent = '—'; return; }
+            while (base <= now) { base += 5 * 3600000; }
+            el.textContent = format(base - now);
+          } else {
+            el.textContent = format(nextWeeklyReset() - now);
+          }
         });
       }
       tick();
       setInterval(tick, 1000);
     </script>`;
     this.panel.webview.html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>${CSS}</style></head>
-      <body>${bodyHtml(usage, error, loading, accounts)}${script}</body></html>`;
+      <body>${bodyHtml(usage, error, loading, accounts, sessionResetMs)}${script}</body></html>`;
   }
 }

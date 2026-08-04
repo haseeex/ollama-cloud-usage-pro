@@ -32,14 +32,14 @@ export function activate(context: vscode.ExtensionContext): void {
       statusBar.backgroundColor = backgroundColor;
       statusBar.color = undefined;
     }),
-    provider.onDidChangeData(({ usage, error, loading, accounts }) => {
-      panel.render(usage, error, loading, accounts);
+    provider.onDidChangeData(({ usage, error, loading, accounts, sessionResetMs }) => {
+      panel.render(usage, error, loading, accounts, sessionResetMs);
     }),
     vscode.commands.registerCommand('ollamaCloud.click', () => {
       const now = Date.now();
       if (now - lastClick < DOUBLE_CLICK_MS) {
         const d = provider.getData();
-        panel.show(d.usage, d.error, d.loading, d.accounts);
+        panel.show(d.usage, d.error, d.loading, d.accounts, d.sessionResetMs);
         lastClick = 0;
       } else {
         lastClick = now;
@@ -48,7 +48,7 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
     vscode.commands.registerCommand('ollamaCloud.openPanel', () => {
       const d = provider.getData();
-      panel.show(d.usage, d.error, d.loading, d.accounts);
+      panel.show(d.usage, d.error, d.loading, d.accounts, d.sessionResetMs);
     }),
     vscode.commands.registerCommand('ollamaCloud.refresh', async () => {
       await vscode.window.withProgress(
