@@ -2,6 +2,19 @@
 
 All notable changes to the Ollama Cloud Usage extension.
 
+## 1.0.5 - 2026-08-19
+
+### Changed
+- Reset windows now UTC-anchored: session on 5h boundaries (00/05/10/15/20 UTC), weekly on Monday 00:00 UTC. Replaces the previous 11:00-local heuristic.
+- Status bar: single item, click opens detail panel. Removed double-click and separate refresh button.
+- Auto-refresh interval reduced from 5 minutes to 60 seconds.
+- Usage panel bars split into per-model segments, each a distinct blue shade (by index). Removed the green/yellow/red severity coloring.
+- Model list follows API order; per-model request count shown (hover bar segment for model name + count).
+- Tooltip shows quota table with per-model share bars and reset countdowns.
+
+### Fixed
+- Reset time no longer depends on local timezone / DST.
+
 ## 1.0.3 - 2026-08-04
 
 ### Fixed

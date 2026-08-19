@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { fetchUsage, LimitUsage, ModelUsage, UsageResponse } from './api';
 import { AccountStore, AccountsState } from './accountStore';
+import { nextSessionResetMs, nextWeeklyResetMs } from './resetTime';
 
 type UsageNode = {
   label: string;
@@ -108,56 +109,32 @@ export interface DataUpdate {
   sessionResetMs: number;
 }
 
-function backgroundFor(percent: number): vscode.ThemeColor | undefined {
-  if (percent >= 80) {
-    return new vscode.ThemeColor('statusBarItem.errorBackground');
-  }
-  if (percent >= 60) {
-    return new vscode.ThemeColor('statusBarItem.warningBackground');
-  }
-  return undefined;
-}
-
-function hexFor(percent: number): string {
-  if (percent >= 80) {
-    return '#f48771';
-  }
-  if (percent >= 60) {
-    return '#cca700';
-  }
-  return '#73c991';
-}
+const BLUE_PALETTE = ['#2563eb', '#3b82f6', '#4f46e5', '#60a5fa', '#1d4ed8', '#6366f1', '#818cf8', '#93c5fd'];
 
 function formatPercent(usage: number): string {
   return `${Math.round(usage * 100)}%`;
 }
 
-function bar(length: number, percent: number): string {
-  const filled = Math.round((length * percent) / 100);
-  const color = hexFor(percent);
-  return `<span style="color:${color}">${'█'.repeat(filled)}</span><span style="color:#6e6e6e">${'░'.repeat(length - filled)}</span>`;
-}
-
-function nextSessionResetMs(now: Date, baseMs: number): number {
-  const nowMs = now.getTime();
-  if (!baseMs) {
-    return 0;
+// Stacked bar: each model = one shade of blue. Filled cells = window usage %,
+// each model's cells = its share of that filled portion.
+function barSegments(models: ModelUsage[], usage: number): string {
+  if (!models.length) {
+    return '—';
   }
-  let base = baseMs;
-  while (base <= nowMs) {
-    base += 5 * 3600_000;
+  const total = models.reduce((s, m) => s + m.request_count, 0);
+  if (!total) {
+    return '—';
   }
-  return base;
-}
-
-function nextWeeklyResetMs(now: Date): number {
-  const d = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 7, 0, 0);
-  const diff = (8 - d.getDay()) % 7;
-  d.setDate(d.getDate() + diff);
-  if (d.getTime() <= now.getTime()) {
-    d.setDate(d.getDate() + 7);
-  }
-  return d.getTime();
+  const filledTotal = Math.round(18 * usage);
+  let allocated = 0;
+  const cells = models.map((m, i) => {
+    const isLast = i === models.length - 1;
+    const filled = isLast ? Math.max(0, filledTotal - allocated) : Math.round((filledTotal * m.request_count) / total);
+    allocated += filled;
+    return `<font color="${BLUE_PALETTE[i % BLUE_PALETTE.length]}">${'█'.repeat(filled)}</font>`;
+  });
+  cells.push(`<font color="#6e6e6e">${'░'.repeat(Math.max(0, 18 - filledTotal))}</font>`);
+  return cells.join('');
 }
 
 function formatReset(ms: number): string {
@@ -178,22 +155,18 @@ function formatReset(ms: number): string {
 }
 
 function quotaTooltip(usage: UsageResponse, sessionResetMs: number): vscode.MarkdownString {
-  const sp = Math.round(usage.limits.session.usage * 100);
-  const wp = Math.round(usage.limits.weekly.usage * 100);
-  const sColor = hexFor(sp);
-  const wColor = hexFor(wp);
-  const now = new Date();
-  const sReset = sessionResetMs ? formatReset(sessionResetMs - now.getTime()) : '—';
-  const wReset = formatReset(nextWeeklyResetMs(now) - now.getTime());
+  const now = Date.now();
+  const sReset = sessionResetMs ? formatReset(sessionResetMs - now) : '—';
+  const wReset = formatReset(nextWeeklyResetMs(now) - now);
   const md = new vscode.MarkdownString();
   md.isTrusted = true;
   md.supportHtml = true;
   md.supportThemeIcons = true;
   md.appendMarkdown(`### $(dashboard) Quota\n\n`);
   md.appendMarkdown(`| Window | Share | Reset |\n|:--|:--|:--|\n`);
-  md.appendMarkdown(`| 5 hour | ${bar(18, sp)} <font color="${sColor}">**${formatPercent(usage.limits.session.usage)}**</font> | ${sReset} |\n`);
-  md.appendMarkdown(`| Week | ${bar(18, wp)} <font color="${wColor}">**${formatPercent(usage.limits.weekly.usage)}**</font> | ${wReset} |\n\n`);
-  md.appendMarkdown(`*Click to refresh.*`);
+  md.appendMarkdown(`| 5 hour | ${barSegments(usage.limits.session.models, usage.limits.session.usage)} **${formatPercent(usage.limits.session.usage)}** | ${sReset} |\n`);
+  md.appendMarkdown(`| Week | ${barSegments(usage.limits.weekly.models, usage.limits.weekly.usage)} **${formatPercent(usage.limits.weekly.usage)}** | ${wReset} |\n\n`);
+  md.appendMarkdown(`*Auto-refresh every 60s · Click to open detail.*`);
   return md;
 }
 
@@ -209,11 +182,23 @@ export class UsageTreeProvider implements vscode.TreeDataProvider<UsageTreeItem>
   private loading = false;
   private accountsState: AccountsState = { accounts: [] };
   private sessionResetMs = 0;
+  private lastRefreshMs = 0;
 
   constructor(private readonly store: AccountStore) {}
 
   getData(): DataUpdate {
     return { usage: this.usage, error: this.error, loading: this.loading, accounts: this.accountsState, sessionResetMs: this.sessionResetMs };
+  }
+
+  getUsage(): UsageResponse | undefined {
+    return this.usage;
+  }
+
+  buildTooltip(): vscode.MarkdownString {
+    if (this.usage) {
+      return quotaTooltip(this.usage, this.sessionResetMs);
+    }
+    return new vscode.MarkdownString('Ollama Cloud Usage');
   }
 
   async getAccounts(): Promise<AccountsState> {
@@ -255,7 +240,7 @@ export class UsageTreeProvider implements vscode.TreeDataProvider<UsageTreeItem>
     this.onDidChangeTreeDataEmitter.fire(undefined);
     this.onDidChangeStatusEmitter.fire({ text: '$(loading~spin) Ollama', tooltip: 'Loading Ollama usage…' });
     this.accountsState = await this.store.load();
-    this.sessionResetMs = await this.store.getSessionResetMs();
+    this.sessionResetMs = nextSessionResetMs(Date.now());
     this.onDidChangeDataEmitter.fire({ usage: this.usage, error: this.error, loading: true, accounts: this.accountsState, sessionResetMs: this.sessionResetMs });
 
     try {
@@ -265,13 +250,12 @@ export class UsageTreeProvider implements vscode.TreeDataProvider<UsageTreeItem>
         throw new Error('No Ollama API key found.');
       }
       this.usage = await fetchUsage(apiKey);
+      this.lastRefreshMs = Date.now();
       const sessionPct = Math.round(this.usage.limits.session.usage * 100);
       const weeklyPct = Math.round(this.usage.limits.weekly.usage * 100);
-      const worst = Math.max(sessionPct, weeklyPct);
       this.onDidChangeStatusEmitter.fire({
         text: `$(dashboard) 5H:${sessionPct}% W:${weeklyPct}%`,
-        tooltip: quotaTooltip(this.usage, this.sessionResetMs),
-        backgroundColor: backgroundFor(worst),
+        tooltip: this.buildTooltip(),
       });
     } catch (error) {
       this.usage = undefined;

@@ -3,48 +3,36 @@ import { UsageTreeProvider } from './usageTreeProvider';
 import { UsagePanel } from './webviewViewProvider';
 import { AccountStore } from './accountStore';
 
-const REFRESH_INTERVAL_MS = 5 * 60 * 1000;
-const DOUBLE_CLICK_MS = 350;
+const REFRESH_INTERVAL_MS = 60 * 1000;
+const TOOLTIP_TICK_MS = 1000;
 
 let refreshTimer: NodeJS.Timeout | undefined;
+let tooltipTimer: NodeJS.Timeout | undefined;
 
 export function activate(context: vscode.ExtensionContext): void {
   const store = new AccountStore(context.secrets);
   const provider = new UsageTreeProvider(store);
   const panel = new UsagePanel();
 
-  let lastClick = 0;
-
-  const statusBar = vscode.window.createStatusBarItem(
+  const usageBar = vscode.window.createStatusBarItem(
     vscode.StatusBarAlignment.Right,
     100,
   );
-  statusBar.name = 'Ollama Cloud Usage';
-  statusBar.tooltip = 'Double-click to open panel · single-click to refresh';
-  statusBar.command = 'ollamaCloud.click';
-  statusBar.show();
+  usageBar.name = 'Ollama Cloud Usage';
+  usageBar.tooltip = 'Click to open detail panel';
+  usageBar.command = 'ollamaCloud.openPanel';
+  usageBar.show();
 
   context.subscriptions.push(
-    statusBar,
+    usageBar,
     provider.onDidChangeStatus(({ text, tooltip, backgroundColor }) => {
-      statusBar.text = text;
-      statusBar.tooltip = tooltip;
-      statusBar.backgroundColor = backgroundColor;
-      statusBar.color = undefined;
+      usageBar.text = text;
+      usageBar.tooltip = tooltip;
+      usageBar.backgroundColor = backgroundColor;
+      usageBar.color = undefined;
     }),
     provider.onDidChangeData(({ usage, error, loading, accounts, sessionResetMs }) => {
       panel.render(usage, error, loading, accounts, sessionResetMs);
-    }),
-    vscode.commands.registerCommand('ollamaCloud.click', () => {
-      const now = Date.now();
-      if (now - lastClick < DOUBLE_CLICK_MS) {
-        const d = provider.getData();
-        panel.show(d.usage, d.error, d.loading, d.accounts, d.sessionResetMs);
-        lastClick = 0;
-      } else {
-        lastClick = now;
-        void provider.refresh();
-      }
     }),
     vscode.commands.registerCommand('ollamaCloud.openPanel', () => {
       const d = provider.getData();
@@ -112,11 +100,20 @@ export function activate(context: vscode.ExtensionContext): void {
 
   void provider.refresh();
   refreshTimer = setInterval(() => void provider.refresh(), REFRESH_INTERVAL_MS);
+  tooltipTimer = setInterval(() => {
+    if (provider.getUsage()) {
+      usageBar.tooltip = provider.buildTooltip();
+    }
+  }, TOOLTIP_TICK_MS);
 }
 
 export function deactivate(): void {
   if (refreshTimer) {
     clearInterval(refreshTimer);
     refreshTimer = undefined;
+  }
+  if (tooltipTimer) {
+    clearInterval(tooltipTimer);
+    tooltipTimer = undefined;
   }
 }
