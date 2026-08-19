@@ -41,4 +41,7 @@ View [Ollama Cloud](https://ollama.com) usage and limits in VS Code — a compac
 
 ## License
 
-MIT
+Copyright 2026 Nguyễn Hoàng Long
+
+Licensed under the Apache License, Version 2.0.
+See the [LICENSE](./LICENSE) file for details.
