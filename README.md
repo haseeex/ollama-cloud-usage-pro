@@ -4,16 +4,14 @@ View [Ollama Cloud](https://ollama.com) usage and limits in VS Code — a compac
 
 ## Features
 
-- **Status bar indicator** — shows session and weekly usage at a glance with color-coded severity:
-  - 🟢 green under 60%
-  - 🟡 yellow at 60%+
-  - 🔴 red at 80%+
-- **Usage panel** — double-click the status bar to open a detailed panel with:
-  - Session and weekly usage progress bars with reset countdown
-  - Models used this session / week with request counts
+- **Status bar indicator** — shows session (5h) and weekly usage at a glance. Hover for a quota tooltip with per-model share bars and reset countdowns.
+- **Usage panel** — click the status bar item to open a detailed panel with:
+  - Session and weekly usage bars, split into per-model segments (blue shades by model)
+  - Reset countdown (live) for each window
+  - Models used this session / week with request counts (hover a bar segment for model name + count)
   - Multi-account support: switch, add, remove accounts via dropdown
-  - Refresh, set API key, and clear key actions
-- **Auto-refresh** — usage reloads every 5 minutes to avoid rate limits.
+- **Auto-refresh** — usage reloads every 60 seconds.
+- **UTC-anchored reset windows** — session resets on 5h boundaries (00/05/10/15/20 UTC); weekly resets Monday 00:00 UTC.
 - **Secure storage** — API keys stored in VS Code Secret Storage (or `OLLAMA_API_KEY` env var).
 
 ## Screenshots
@@ -29,16 +27,17 @@ View [Ollama Cloud](https://ollama.com) usage and limits in VS Code — a compac
 ## Use
 
 1. Install extension.
-2. Double-click the **Ollama Cloud** status bar item (bottom-right).
-3. Click 🔑 and paste your Ollama API key. Or start VS Code with `OLLAMA_API_KEY` set.
-4. Click ⟳ to refresh usage.
+2. Click the **Ollama Cloud** status bar item (bottom-right) to open the panel.
+3. Click ＋ and paste your Ollama API key. Or start VS Code with `OLLAMA_API_KEY` set.
+4. Usage auto-refreshes every 60s; click ⟳ in the panel to refresh manually.
 
 ## Commands
 
 - `Ollama Cloud: Refresh Usage`
-- `Ollama Cloud: Set API Key`
-- `Ollama Cloud: Clear Stored API Key`
 - `Ollama Cloud: Open Usage Panel`
+- `Ollama Cloud: Add Account`
+- `Ollama Cloud: Remove Account`
+- `Ollama Cloud: Switch Account`
 
 ## License
 
