@@ -1,6 +1,8 @@
 import * as vscode from 'vscode';
-import { ModelUsage, UsageResponse } from './api';
+import { ModelUsage } from './api';
 import { AccountsState } from './accountStore';
+import { DataUpdate } from './usageTreeProvider';
+import { formatIntervalSeconds } from './config';
 
 // Blue palette, one shade per model (by index).
 const PALETTE = ['#2563eb', '#3b82f6', '#4f46e5', '#60a5fa', '#1d4ed8', '#6366f1', '#818cf8', '#93c5fd'];
@@ -33,22 +35,22 @@ function rowHtml(label: string, usage: number, models: ModelUsage[], resetType: 
   return `<div class="row">
     <div class="row-head">
       <span class="row-label">${label}</span>
-      <span class="row-pct">${pct(usage)}% used</span>
+      <span class="row-pct">已用 ${pct(usage)}%</span>
     </div>
     ${segmentsHtml(models, usage)}
-    <div class="reset">Resets in <span data-reset="${resetType}">…</span>.</div>
+    <div class="reset">重置倒计时：<span data-reset="${resetType}">…</span></div>
   </div>`;
 }
 
 function modelListHtml(models: ModelUsage[]): string {
   if (!models.length) {
-    return '<div class="empty">No model requests</div>';
+    return '<div class="empty">无模型请求</div>';
   }
   return models.map((m, i) =>
     `<div class="model">
       <span class="dot" style="color:${colorFor(i)}">●</span>
       <span class="model-name">${escapeHtml(m.name)}</span>
-      <span class="model-count">${m.request_count.toLocaleString()} requests</span>
+      <span class="model-count">${m.request_count.toLocaleString()} 次请求</span>
     </div>`,
   ).join('');
 }
@@ -59,8 +61,8 @@ function accountsHtml(state: AccountsState): string {
   ).join('');
   return `<div class="accounts">
     <select class="account-select" data-cmd="switchAccount">${opts}</select>
-    <button class="icon-btn" data-cmd="addAccount" title="Add account">＋</button>
-    <button class="icon-btn" data-cmd="removeAccount" title="Remove account" ${state.accounts.length ? '' : 'disabled'}>－</button>
+    <button class="icon-btn" data-cmd="addAccount" title="添加账户">＋</button>
+    <button class="icon-btn" data-cmd="removeAccount" title="移除账户" ${state.accounts.length ? '' : 'disabled'}>－</button>
   </div>`;
 }
 
@@ -68,39 +70,48 @@ function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
 }
 
-function bodyHtml(usage: UsageResponse | undefined, error: string | undefined, loading: boolean, accounts: AccountsState, sessionResetMs: number): string {
+function footerHtml(data: DataUpdate): string {
+  const parts = [`每 ${formatIntervalSeconds(data.intervalSeconds)}自动刷新`];
+  if (data.lastUpdatedMs) {
+    parts.push(`上次更新 ${new Intl.DateTimeFormat(undefined, { timeStyle: 'medium' }).format(data.lastUpdatedMs)}`);
+  }
+  return `<div class="footer">${parts.join(' · ')}</div>`;
+}
+
+function bodyHtml(data: DataUpdate): string {
+  const { usage, error, loading, accounts } = data;
   const toolbar = `<div class="toolbar">
-    <h2>☁ Cloud usage</h2>
+    <h2>☁ 云端用量</h2>
     <div class="actions">
-      <button class="icon-btn" data-cmd="refresh" title="Refresh">⟳</button>
+      <button class="icon-btn" data-cmd="refresh" title="刷新">⟳</button>
+      <button class="icon-btn" data-cmd="setRefreshInterval" title="设置自动刷新间隔">⚙</button>
     </div>
   </div>
   ${accountsHtml(accounts)}`;
 
+  let content: string;
   if (loading) {
-    return `${toolbar}<div class="state">Loading Ollama usage…</div>`;
-  }
-  if (error) {
-    return `${toolbar}<div class="state error">⚠ ${escapeHtml(error)}</div>
-      <button class="btn" data-cmd="addAccount">Add API Key</button>`;
-  }
-  if (!usage) {
-    return `${toolbar}<div class="state">No data.</div>`;
-  }
-  const sp = pct(usage.limits.session.usage);
-  const wp = pct(usage.limits.weekly.usage);
-  return `${toolbar}
-    ${rowHtml('Session usage', usage.limits.session.usage, usage.limits.session.models, 'session')}
+    content = `<div class="state">正在加载 Ollama 用量…</div>`;
+  } else if (error) {
+    content = `<div class="state error">⚠ ${escapeHtml(error)}</div>
+      <button class="btn" data-cmd="addAccount">添加 API 密钥</button>`;
+  } else if (!usage) {
+    content = `<div class="state">暂无数据。</div>`;
+  } else {
+    content = `
+    ${rowHtml('5 小时窗口用量', usage.limits.session.usage, usage.limits.session.models, 'session')}
     <div class="group">
-      <div class="group-label">Models used this session</div>
+      <div class="group-label">本窗口使用的模型</div>
       <div class="models">${modelListHtml(usage.limits.session.models)}</div>
     </div>
     <div class="spacer"></div>
-    ${rowHtml('Weekly usage', usage.limits.weekly.usage, usage.limits.weekly.models, 'weekly')}
+    ${rowHtml('每周窗口用量', usage.limits.weekly.usage, usage.limits.weekly.models, 'weekly')}
     <div class="group">
-      <div class="group-label">Models used this week</div>
+      <div class="group-label">本周使用的模型</div>
       <div class="models">${modelListHtml(usage.limits.weekly.models)}</div>
     </div>`;
+  }
+  return `${toolbar}${content}${footerHtml(data)}`;
 }
 
 const CSS = `
@@ -134,26 +145,29 @@ const CSS = `
   .state.error { color: #f48771; }
   .btn { margin-top: 12px; padding: 6px 12px; background: var(--vscode-button-background); color: var(--vscode-button-foreground); border: none; border-radius: 4px; cursor: pointer; font-size: 12px; }
   .btn:hover { background: var(--vscode-button-hoverBackground); }
+  .footer { margin-top: 18px; font-size: 11px; color: var(--vscode-descriptionForeground); text-align: center; }
 `;
 
 export class UsagePanel {
   private panel: vscode.WebviewPanel | undefined;
 
-  show(usage: UsageResponse | undefined, error: string | undefined, loading: boolean, accounts: AccountsState, sessionResetMs: number): void {
+  show(data: DataUpdate): void {
     if (this.panel) {
       this.panel.reveal();
-      this.render(usage, error, loading, accounts, sessionResetMs);
+      this.render(data);
       return;
     }
     this.panel = vscode.window.createWebviewPanel(
       'ollamaCloudUsage',
-      'Ollama Cloud Usage',
+      'Ollama Cloud 用量',
       vscode.ViewColumn.Active,
       { enableScripts: true, retainContextWhenHidden: true },
     );
     this.panel.webview.onDidReceiveMessage((msg) => {
       if (msg.cmd === 'refresh') {
         void vscode.commands.executeCommand('ollamaCloud.refresh');
+      } else if (msg.cmd === 'setRefreshInterval') {
+        void vscode.commands.executeCommand('ollamaCloud.setRefreshInterval');
       } else if (msg.cmd === 'addAccount') {
         void vscode.commands.executeCommand('ollamaCloud.addAccount');
       } else if (msg.cmd === 'removeAccount') {
@@ -163,10 +177,10 @@ export class UsagePanel {
       }
     });
     this.panel.onDidDispose(() => { this.panel = undefined; });
-    this.render(usage, error, loading, accounts, sessionResetMs);
+    this.render(data);
   }
 
-  render(usage: UsageResponse | undefined, error: string | undefined, loading: boolean, accounts: AccountsState, sessionResetMs: number): void {
+  render(data: DataUpdate): void {
     if (!this.panel) {
       return;
     }
@@ -183,7 +197,7 @@ export class UsagePanel {
       document.addEventListener('mouseover', (e) => {
         const seg = e.target.closest('.seg');
         if (!seg || !tip) { return; }
-        tip.innerHTML = '<strong>' + seg.dataset.name + '</strong><br>' + seg.dataset.count + ' requests';
+        tip.innerHTML = '<strong>' + seg.dataset.name + '</strong><br>' + seg.dataset.count + ' 次请求';
         tip.style.display = 'block';
       });
       document.addEventListener('mousemove', (e) => {
@@ -205,10 +219,10 @@ export class UsagePanel {
         const m = Math.floor(s / 60);
         const h = Math.floor(m / 60);
         const days = Math.floor(h / 24);
-        if (days >= 1) { return days + ' day' + (days > 1 ? 's' : ''); }
-        if (h >= 1) { return h + ' hour' + (h > 1 ? 's' : '') + (m % 60 ? ' ' + (m % 60) + ' min' : ''); }
-        if (m >= 1) { return m + ' minute' + (m > 1 ? 's' : ''); }
-        return s + ' second' + (s > 1 ? 's' : '');
+        if (days >= 1) { return days + ' 天'; }
+        if (h >= 1) { return h + ' 小时' + (m % 60 ? ' ' + (m % 60) + ' 分钟' : ''); }
+        if (m >= 1) { return m + ' 分钟'; }
+        return s + ' 秒';
       }
       function tick() {
         const now = Date.now();
@@ -224,7 +238,7 @@ export class UsagePanel {
       tick();
       setInterval(tick, 1000);
     </script>`;
-    this.panel.webview.html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>${CSS}</style></head>
-      <body>${bodyHtml(usage, error, loading, accounts, sessionResetMs)}<div id="tip"></div>${script}</body></html>`;
+    this.panel.webview.html = `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><style>${CSS}</style></head>
+      <body>${bodyHtml(data)}<div id="tip"></div>${script}</body></html>`;
   }
 }
