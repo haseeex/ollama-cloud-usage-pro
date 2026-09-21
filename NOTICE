@@ -1,0 +1,48 @@
+Ollama Cloud Usage Pro
+Copyright 2026 vancat
+
+本产品包含由 longnh0411/ollama-cloud-usage 开发的软件。
+
+=======================================================================
+原始作品
+=======================================================================
+
+Ollama Cloud Usage
+Copyright 2026 Nguyễn Hoàng Long
+
+项目地址: https://github.com/longnh0411/ollama-cloud-usage
+作者:     Nguyễn Hoàng Long (GitHub: @longnh0411, Email: longnh94@fpt.com)
+授权协议: Apache License, Version 2.0
+
+=======================================================================
+衍生作品
+=======================================================================
+
+Ollama Cloud Usage Pro
+Copyright 2026 vancat
+
+项目地址: https://github.com/haseeex/ollama-cloud-usage-pro
+作者:     vancat (GitHub: @haseeex)
+授权协议: Apache License, Version 2.0
+
+本衍生作品在原始作品基础上所做的修改（依据 Apache License 2.0 第 4(b) 条声明）：
+
+  1. 跨窗口请求协调：通过全局存储中的共享用量缓存与跨窗口抓取锁，
+     避免多个 VS Code 窗口重复请求 Ollama API。
+  2. 可配置的自动刷新间隔（ollamaCloud.refreshInterval，10–86400 秒），
+     取代原先固定的 60 秒轮询。
+  3. 状态栏悬浮提示与用量面板底部显示上次更新时间。
+  4. 全部界面文案、README 与 CHANGELOG 中文化。
+
+=======================================================================
+许可证
+=======================================================================
+
+本文件所涉及的全部作品均依据 Apache License, Version 2.0 授权，
+许可证全文见同目录下的 LICENSE 文件，或访问：
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+除非适用法律要求或书面同意，依据本许可证分发的软件均按
+"原样" 提供，不附带任何明示或暗示的担保或条件。
+详见 LICENSE 文件中关于权限与限制的具体条款。
