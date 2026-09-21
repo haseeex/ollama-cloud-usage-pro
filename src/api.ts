@@ -40,7 +40,7 @@ export class UsageApiError extends Error {
 
 function asRecord(value: unknown, name: string): UnknownRecord {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
-    throw new UsageApiError(`Invalid ${name} in Ollama response.`);
+    throw new UsageApiError(`Ollama 响应中的 ${name} 无效。`);
   }
 
   return value as UnknownRecord;
@@ -48,7 +48,7 @@ function asRecord(value: unknown, name: string): UnknownRecord {
 
 function asString(value: unknown, name: string): string {
   if (typeof value !== 'string') {
-    throw new UsageApiError(`Invalid ${name} in Ollama response.`);
+    throw new UsageApiError(`Ollama 响应中的 ${name} 无效。`);
   }
 
   return value;
@@ -56,7 +56,7 @@ function asString(value: unknown, name: string): string {
 
 function asNumber(value: unknown, name: string): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) {
-    throw new UsageApiError(`Invalid ${name} in Ollama response.`);
+    throw new UsageApiError(`Ollama 响应中的 ${name} 无效。`);
   }
 
   return value;
@@ -64,7 +64,7 @@ function asNumber(value: unknown, name: string): number {
 
 function parseModels(value: unknown, name: string): ModelUsage[] {
   if (!Array.isArray(value)) {
-    throw new UsageApiError(`Invalid ${name} in Ollama response.`);
+    throw new UsageApiError(`Ollama 响应中的 ${name} 无效。`);
   }
 
   return value.map((model, index) => {
@@ -109,7 +109,7 @@ export function parseUsage(value: unknown): UsageResponse {
 
 export async function fetchUsage(apiKey: string): Promise<UsageResponse> {
   if (!apiKey.trim()) {
-    throw new UsageApiError('Ollama API key is empty.');
+    throw new UsageApiError('Ollama API 密钥为空。');
   }
 
   return new Promise((resolve, reject) => {
@@ -126,7 +126,7 @@ export async function fetchUsage(apiKey: string): Promise<UsageResponse> {
       response.on('data', (chunk: string) => {
         size += Buffer.byteLength(chunk);
         if (size > MAX_RESPONSE_BYTES) {
-          response.destroy(new UsageApiError('Ollama response is too large.'));
+          response.destroy(new UsageApiError('Ollama 响应过大。'));
           return;
         }
         body += chunk;
@@ -134,19 +134,19 @@ export async function fetchUsage(apiKey: string): Promise<UsageResponse> {
       response.on('error', reject);
       response.on('end', () => {
         if (response.statusCode !== 200) {
-          reject(new UsageApiError(`Ollama returned HTTP ${response.statusCode ?? 'unknown'}.`));
+          reject(new UsageApiError(`Ollama 返回 HTTP ${response.statusCode ?? '未知'}。`));
           return;
         }
 
         try {
           resolve(parseUsage(JSON.parse(body)));
         } catch (error) {
-          reject(error instanceof Error ? error : new UsageApiError('Invalid Ollama response.'));
+          reject(error instanceof Error ? error : new UsageApiError('Ollama 响应无效。'));
         }
       });
     });
 
-    request.setTimeout(10_000, () => request.destroy(new UsageApiError('Ollama request timed out.')));
+    request.setTimeout(10_000, () => request.destroy(new UsageApiError('Ollama 请求超时。')));
     request.on('error', reject);
     request.end();
   });

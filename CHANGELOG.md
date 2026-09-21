@@ -1,45 +1,60 @@
-# Changelog
+# 更新日志
 
-All notable changes to the Ollama Cloud Usage extension.
+Ollama Cloud 用量监控扩展的所有重要变更都会记录在此。
+
+## 1.1.0 - 2026-09-18
+
+### 新增
+- 可配置的自动刷新间隔：新增 `ollamaCloud.refreshInterval` 设置项（10–86400 秒，默认 60）、`Ollama Cloud: 设置自动刷新间隔` 命令，以及面板中的 ⚙ 按钮。
+- 跨窗口请求协调：全局存储中的用量缓存由所有 VS Code 窗口共享。缓存新鲜时直接复用快照而不再请求；当多个窗口同时到期时，跨窗口锁确保只有一个窗口真正发起请求 —— 多开窗口不再成倍增加 API 请求。
+- 面板底部显示当前刷新间隔与上次更新时间。
+- 状态栏悬浮提示新增上次更新时间，与刷新频率一同展示。
+
+### 变更
+- 手动刷新（⟳ / `Ollama Cloud: 刷新用量`）现在会绕过共享缓存。
+- 同一窗口内的并发刷新会被合并为单次请求。
+
+### 修复
+- 错误状态现在指向 `Ollama Cloud: 添加账户`，不再指向已移除的 `setApiKey` 命令。
 
 ## 1.0.5 - 2026-08-19
 
-### Changed
-- Reset windows now UTC-anchored: session on 5h boundaries (00/05/10/15/20 UTC), weekly on Monday 00:00 UTC. Replaces the previous 11:00-local heuristic.
-- Status bar: single item, click opens detail panel. Removed double-click and separate refresh button.
-- Auto-refresh interval reduced from 5 minutes to 60 seconds.
-- Usage panel bars split into per-model segments, each a distinct blue shade (by index). Removed the green/yellow/red severity coloring.
-- Model list follows API order; per-model request count shown (hover bar segment for model name + count).
-- Tooltip shows quota table with per-model share bars and reset countdowns.
+### 变更
+- 重置窗口改为 UTC 对齐：5 小时窗口按 UTC 00/05/10/15/20 点边界重置，每周窗口按周一 UTC 00:00 重置。取代了此前基于本地时间 11:00 的推断方式。
+- 状态栏：合并为单个图标，点击打开详情面板。移除了双击操作与独立的刷新按钮。
+- 自动刷新间隔从 5 分钟缩短为 60 秒。
+- 用量面板的进度条按模型拆分为多段，每段使用不同的蓝色色调（按索引分配）。移除了绿/黄/红的分级配色。
+- 模型列表按 API 返回顺序排列；显示每个模型的请求次数（悬浮条形段可查看模型名与次数）。
+- 悬浮提示改为配额表格，包含各模型占比条与重置倒计时。
 
-### Fixed
-- Reset time no longer depends on local timezone / DST.
+### 修复
+- 重置时间不再受本地时区 / 夏令时影响。
 
 ## 1.0.3 - 2026-08-04
 
-### Fixed
-- Session 5h reset time: now anchored to 11:00 today with a rolling 5h window (matches Ollama's actual reset behavior) instead of fixed hourly slots.
+### 修复
+- 5 小时会话重置时间：改为基于当天 11:00 的滚动 5 小时窗口（与 Ollama 实际的重置行为一致），不再使用固定的整点时段。
 
 ## 1.0.2 - 2026-08-04
 
-### Fixed
-- README screenshots now use absolute GitHub raw URLs so images render on the marketplace and web.
+### 修复
+- README 截图改用 GitHub 原始文件的绝对地址，确保在扩展市场与网页端都能正常显示。
 
 ## 1.0.1 - 2026-08-04
 
-### Added
-- Screenshots of the usage panel and status bar to the README.
+### 新增
+- 在 README 中加入用量面板与状态栏的截图。
 
 ## 1.0.0 - 2026-08-04
 
-### Added
-- Multi-account support: switch, add, remove accounts via a dropdown in the panel.
-- Reset countdown displayed under each usage bar (session and weekly).
-- Status bar indicator with color-coded severity (green/yellow/red).
-- Auto-refresh every 5 minutes.
-- Secure API key storage in VS Code Secret Storage.
+### 新增
+- 多账户支持：通过面板下拉框切换、添加、移除账户。
+- 在每条用量条下方显示重置倒计时（5 小时窗口与每周窗口）。
+- 状态栏指示器，按用量严重程度配色（绿/黄/红）。
+- 每 5 分钟自动刷新。
+- API 密钥安全存储在 VS Code Secret Storage 中。
 
-## 0.0.1 - Initial version
+## 0.0.1 - 初始版本
 
-### Added
-- View Ollama Cloud usage and limits.
+### 新增
+- 查看 Ollama Cloud 的用量与限额。
