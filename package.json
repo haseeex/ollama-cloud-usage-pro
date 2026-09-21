@@ -1,22 +1,29 @@
 {
   "name": "ollama-cloud-usage",
-  "displayName": "Ollama Cloud Usage",
-  "description": "View Ollama Cloud usage and limits in VS Code.",
-  "version": "1.0.5",
-  "publisher": "ollama-cloud-usage",
+  "displayName": "Ollama Cloud 用量监控",
+  "description": "在 VS Code 中查看 Ollama Cloud 用量与限额。",
+  "version": "1.1.0",
+  "publisher": "haseeex",
   "author": {
-    "name": "LongNH94",
-    "email": "longnh94@fpt.com"
+    "name": "vancat",
+    "url": "https://github.com/haseeex"
   },
-  "license": "MIT",
+  "contributors": [
+    {
+      "name": "Nguyễn Hoàng Long (LongNH94)",
+      "email": "longnh94@fpt.com",
+      "url": "https://github.com/longnh0411"
+    }
+  ],
+  "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/longnh0411/ollama-cloud-usage.git"
+    "url": "https://github.com/haseeex/ollama-cloud-usage-pro.git"
   },
   "bugs": {
-    "url": "https://github.com/longnh0411/ollama-cloud-usage/issues"
+    "url": "https://github.com/haseeex/ollama-cloud-usage-pro/issues"
   },
-  "homepage": "https://github.com/longnh0411/ollama-cloud-usage#readme",
+  "homepage": "https://github.com/haseeex/ollama-cloud-usage-pro#readme",
   "engines": {
     "vscode": "^1.95.0"
   },
@@ -43,31 +50,48 @@
     "commands": [
       {
         "command": "ollamaCloud.refresh",
-        "title": "Ollama Cloud: Refresh Usage",
+        "title": "Ollama Cloud: 刷新用量",
         "icon": "$(refresh)"
       },
       {
         "command": "ollamaCloud.addAccount",
-        "title": "Ollama Cloud: Add Account",
+        "title": "Ollama Cloud: 添加账户",
         "icon": "$(add)"
       },
       {
         "command": "ollamaCloud.removeAccount",
-        "title": "Ollama Cloud: Remove Account",
+        "title": "Ollama Cloud: 移除账户",
         "icon": "$(trash)"
       },
       {
         "command": "ollamaCloud.openPanel",
-        "title": "Ollama Cloud: Open Usage Panel",
+        "title": "Ollama Cloud: 打开用量面板",
         "icon": "$(layout-sidebar-left)"
+      },
+      {
+        "command": "ollamaCloud.setRefreshInterval",
+        "title": "Ollama Cloud: 设置自动刷新间隔",
+        "icon": "$(settings-gear)"
       }
     ],
-    "menus": {}
+    "menus": {},
+    "configuration": {
+      "title": "Ollama Cloud 用量",
+      "properties": {
+        "ollamaCloud.refreshInterval": {
+          "type": "number",
+          "default": 60,
+          "minimum": 10,
+          "maximum": 86400,
+          "markdownDescription": "自动刷新间隔（秒），范围 10–86400。多个 VS Code 窗口共享同一份用量缓存，缓存新鲜时不会重复请求。"
+        }
+      }
+    }
   },
   "scripts": {
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "test": "npm run compile && node --test out/api.test.js"
+    "test": "npm run compile && node --test out/api.test.js out/sharedCache.test.js"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

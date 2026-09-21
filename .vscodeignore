@@ -6,3 +6,5 @@ out/**/*.map
 out/**/*.test.js
 out/**/*.test.js.map
 node_modules/**
+*.vsix
+*.bat
