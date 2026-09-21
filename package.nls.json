@@ -1,4 +1,7 @@
 {
+  "ext.displayName": "Ollama Cloud Usage Monitor Pro",
+  "ext.description": "View Ollama Cloud usage and quota limits in VS Code.",
+
   "cmd.refresh": "Ollama Cloud: Refresh Usage",
   "cmd.addAccount": "Ollama Cloud: Add Account",
   "cmd.removeAccount": "Ollama Cloud: Remove Account",

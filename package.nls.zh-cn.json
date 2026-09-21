@@ -1,4 +1,7 @@
 {
+  "ext.displayName": "Ollama Cloud 用量监控 Pro",
+  "ext.description": "在 VS Code 中查看 Ollama Cloud 用量与限额。",
+
   "cmd.refresh": "Ollama Cloud: 刷新用量",
   "cmd.addAccount": "Ollama Cloud: 添加账户",
   "cmd.removeAccount": "Ollama Cloud: 移除账户",

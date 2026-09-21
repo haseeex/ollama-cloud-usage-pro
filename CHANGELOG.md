@@ -15,6 +15,9 @@ Ollama Cloud 用量监控扩展的所有重要变更都会记录在此。
 ### 变更
 - 本地化字符串集中到 `localization.ts`，`api.ts` 的错误信息也随之支持中英文。
 - 新增 `quotaPredictor.ts`（配额预测）与 `barLayout.ts`（用量条格分配与配色）及其单元测试，移植自 Visual Studio 版扩展。
+- 扩展更名为 **Ollama Cloud 用量监控 Pro**（ID：`ollama-cloud-usage-pro`），以区别于上游原扩展。
+- 扩展图标改为与 Visual Studio 版一致的羊驼滑板车造型，配色由金色调整为蓝色。
+- README 截图更新为状态栏悬浮面板、用量面板与设置项三张实拍图。
 
 ## 1.1.0 - 2026-09-18
 

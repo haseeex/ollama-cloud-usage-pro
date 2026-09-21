@@ -1,6 +1,8 @@
-# Ollama Cloud Usage
+# Ollama Cloud 用量监控 Pro
 
 在 VS Code 中查看 [Ollama Cloud](https://ollama.com) 的用量与限额 —— 一个简洁的状态栏指示器，加上一个详细的用量面板。
+
+> 本扩展是 [longnh0411/ollama-cloud-usage](https://github.com/longnh0411/ollama-cloud-usage) 的增强分支（二改）。
 
 ## 功能特性
 
@@ -20,13 +22,23 @@
 
 ## 截图
 
+### 状态栏悬浮面板
+
+悬浮状态栏图标即可看到 5 小时窗口与每周窗口的用量条、剩余预测、重置倒计时，以及逐个模型的明细（色点、占比、请求次数、剩余预测）。
+
+![状态栏悬浮面板](https://raw.githubusercontent.com/haseeex/ollama-cloud-usage-pro/main/resources/screenshot-hover.png)
+
 ### 用量面板
+
+点击状态栏图标打开详细面板：多账户切换、按模型分段的用量条、每个窗口的模型列表与重置倒计时。
 
 ![用量面板](https://raw.githubusercontent.com/haseeex/ollama-cloud-usage-pro/main/resources/screenshot-panel.png)
 
-### 状态栏
+### 设置项
 
-![状态栏](https://raw.githubusercontent.com/haseeex/ollama-cloud-usage-pro/main/resources/screenshot-statusbar.png)
+`ollamaCloud.language`、`ollamaCloud.refreshInterval`、`ollamaCloud.usagePrecision` 均可在设置界面中调整。
+
+![设置项](https://raw.githubusercontent.com/haseeex/ollama-cloud-usage-pro/main/resources/screenshot-settings.png)
 
 ## 使用方法
 
@@ -92,7 +104,14 @@ $$\text{剩余可请求次数} = \text{窗口容量} - \text{已用请求数}$$
 - 衍生作品版权：Copyright 2026 vancat
 - 授权协议：Apache License 2.0
 
-本衍生作品在原项目基础上新增的主要改动包括：跨窗口请求协调（多开 VS Code 窗口不会成倍增加 API 请求）、可配置的自动刷新间隔、状态栏与面板的上次更新时间显示，以及全部界面文案中文化。
+本衍生作品在原项目基础上新增的主要改动包括：
+
+- **中英文界面**：全部界面文案支持中文与英文，默认跟随 VS Code 显示语言，也可手动切换。
+- **配额预测**：按当前窗口的平均消耗水平估算重置前还能请求多少次（窗口级与单模型级均有）。
+- **状态栏悬浮面板**：按模型着色的用量条、剩余预测、重置倒计时，以及逐个模型的明细列表（色点、占比、请求次数、剩余预测）。
+- **用量显示精度**：可配置百分比小数位数，占比类数值在设定精度下会显示为 0 时自动提高精度。
+- **跨窗口请求协调**：多个 VS Code 窗口共享同一份用量缓存，多开窗口不会成倍增加 API 请求。
+- **可配置的自动刷新间隔**，以及状态栏与面板的上次更新时间显示。
 
 ### 许可证
 

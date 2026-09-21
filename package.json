@@ -1,7 +1,7 @@
 {
-  "name": "ollama-cloud-usage",
-  "displayName": "Ollama Cloud 用量监控",
-  "description": "在 VS Code 中查看 Ollama Cloud 用量与限额。",
+  "name": "ollama-cloud-usage-pro",
+  "displayName": "%ext.displayName%",
+  "description": "%ext.description%",
   "version": "1.2.0",
   "publisher": "haseeex",
   "author": {
