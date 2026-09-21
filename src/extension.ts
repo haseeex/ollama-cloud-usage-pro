@@ -5,13 +5,22 @@ import { UsagePanel } from './webviewViewProvider';
 import { AccountStore } from './accountStore';
 import { SharedUsageCache } from './sharedCache';
 import {
+  LANGUAGE_SETTING,
   MAX_REFRESH_INTERVAL_S,
+  MAX_USAGE_PRECISION,
   MIN_REFRESH_INTERVAL_S,
+  MIN_USAGE_PRECISION,
   REFRESH_INTERVAL_SETTING,
+  USAGE_PRECISION_SETTING,
   formatIntervalSeconds,
   getRefreshIntervalMs,
   getRefreshIntervalSeconds,
+  getUsagePrecision,
+  syncLanguage,
+  t,
+  tf,
 } from './config';
+import { onLanguageChanged } from './localization';
 
 const TOOLTIP_TICK_MS = 1000;
 
@@ -19,6 +28,8 @@ let refreshTimer: NodeJS.Timeout | undefined;
 let tooltipTimer: NodeJS.Timeout | undefined;
 
 export function activate(context: vscode.ExtensionContext): void {
+  syncLanguage();
+
   const store = new AccountStore(context.secrets);
   const cache = new SharedUsageCache(path.join(context.globalStorageUri.fsPath, 'usage-cache.json'));
   const provider = new UsageTreeProvider(store, cache);
@@ -36,16 +47,16 @@ export function activate(context: vscode.ExtensionContext): void {
   const setRefreshInterval = async (): Promise<void> => {
     const current = getRefreshIntervalSeconds();
     const input = await vscode.window.showInputBox({
-      prompt: `自动刷新间隔（秒），范围 ${MIN_REFRESH_INTERVAL_S}–${MAX_REFRESH_INTERVAL_S}`,
+      prompt: tf('Dlg.IntervalPrompt', MIN_REFRESH_INTERVAL_S, MAX_REFRESH_INTERVAL_S),
       value: String(current),
       ignoreFocusOut: true,
       validateInput: (v) => {
         const n = Number(v.trim());
         if (!Number.isFinite(n)) {
-          return '请输入数字。';
+          return t('Dlg.IntervalInvalid');
         }
         if (n < MIN_REFRESH_INTERVAL_S || n > MAX_REFRESH_INTERVAL_S) {
-          return `间隔需在 ${MIN_REFRESH_INTERVAL_S}–${MAX_REFRESH_INTERVAL_S} 秒之间。`;
+          return tf('Dlg.IntervalRange', MIN_REFRESH_INTERVAL_S, MAX_REFRESH_INTERVAL_S);
         }
         return undefined;
       },
@@ -57,15 +68,54 @@ export function activate(context: vscode.ExtensionContext): void {
     await vscode.workspace
       .getConfiguration('ollamaCloud')
       .update('refreshInterval', seconds, vscode.ConfigurationTarget.Global);
-    void vscode.window.showInformationMessage(`Ollama Cloud 刷新间隔已设为 ${formatIntervalSeconds(seconds)}。`);
+    void vscode.window.showInformationMessage(tf('Msg.IntervalSet', formatIntervalSeconds(seconds)));
+  };
+
+  const setUsagePrecision = async (): Promise<void> => {
+    const current = getUsagePrecision();
+    const input = await vscode.window.showInputBox({
+      prompt: tf('Dlg.PrecisionPrompt', MIN_USAGE_PRECISION, MAX_USAGE_PRECISION),
+      value: String(current),
+      ignoreFocusOut: true,
+      validateInput: (v) => {
+        const n = Number(v.trim());
+        if (!Number.isFinite(n)) {
+          return t('Dlg.PrecisionInvalid');
+        }
+        if (n < MIN_USAGE_PRECISION || n > MAX_USAGE_PRECISION) {
+          return tf('Dlg.PrecisionRange', MIN_USAGE_PRECISION, MAX_USAGE_PRECISION);
+        }
+        return undefined;
+      },
+    });
+    if (input === undefined) {
+      return;
+    }
+    const precision = Math.round(Number(input.trim()));
+    await vscode.workspace
+      .getConfiguration('ollamaCloud')
+      .update('usagePrecision', precision, vscode.ConfigurationTarget.Global);
+    void vscode.window.showInformationMessage(tf('Msg.PrecisionSet', precision));
+  };
+
+  const toggleLanguage = async (): Promise<void> => {
+    const next = vscode.workspace
+      .getConfiguration('ollamaCloud')
+      .get<string>('language', 'auto');
+    const target = next === 'zh' ? 'en' : 'zh';
+    await vscode.workspace
+      .getConfiguration('ollamaCloud')
+      .update('language', target, vscode.ConfigurationTarget.Global);
+    syncLanguage();
+    void vscode.window.showInformationMessage(tf('Msg.LanguageSet'));
   };
 
   const usageBar = vscode.window.createStatusBarItem(
     vscode.StatusBarAlignment.Right,
     100,
   );
-  usageBar.name = 'Ollama Cloud 用量';
-  usageBar.tooltip = '点击打开详情面板';
+  usageBar.name = t('Cmd.OpenPanel');
+  usageBar.tooltip = t('StatusBar.Tooltip');
   usageBar.command = 'ollamaCloud.openPanel';
   usageBar.show();
 
@@ -85,30 +135,33 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
     vscode.commands.registerCommand('ollamaCloud.refresh', async () => {
       await vscode.window.withProgress(
-        { location: vscode.ProgressLocation.Window, title: '正在刷新 Ollama Cloud 用量' },
+        { location: vscode.ProgressLocation.Window, title: t('Panel.Loading') },
         () => provider.refresh(true),
       );
     }),
     vscode.commands.registerCommand('ollamaCloud.setRefreshInterval', setRefreshInterval),
+    vscode.commands.registerCommand('ollamaCloud.setUsagePrecision', setUsagePrecision),
+    vscode.commands.registerCommand('ollamaCloud.toggleLanguage', toggleLanguage),
     vscode.commands.registerCommand('ollamaCloud.addAccount', async () => {
       const label = await vscode.window.showInputBox({
-        prompt: '账户名称（例如：工作、个人）',
+        prompt: t('Dlg.AccountLabel'),
         ignoreFocusOut: true,
-        validateInput: (v) => v.trim() ? undefined : '名称不能为空。',
+        validateInput: (v) => v.trim() ? undefined : t('Dlg.AccountLabelRequired'),
       });
       if (label === undefined) {
         return;
       }
       const apiKey = await vscode.window.showInputBox({
-        prompt: '输入 Ollama API 密钥',
+        prompt: t('Dlg.ApiKey'),
         password: true,
         ignoreFocusOut: true,
-        validateInput: (v) => v.trim() ? undefined : 'API 密钥不能为空。',
+        validateInput: (v) => v.trim() ? undefined : t('Dlg.ApiKeyRequired'),
       });
       if (apiKey === undefined) {
         return;
       }
       await store.add(label, apiKey);
+      void vscode.window.showInformationMessage(t('Msg.AccountAdded'));
       await provider.refresh();
     }),
     vscode.commands.registerCommand('ollamaCloud.removeAccount', async () => {
@@ -121,32 +174,44 @@ export function activate(context: vscode.ExtensionContext): void {
         id: a.id,
       } as vscode.QuickPickItem & { id: string }));
       const picked = await vscode.window.showQuickPick(items, {
-        placeHolder: '选择要移除的账户',
+        placeHolder: t('Dlg.RemoveAccountTitle'),
         ignoreFocusOut: true,
       });
       if (!picked) {
         return;
       }
       const answer = await vscode.window.showWarningMessage(
-        `确定移除账户「${picked.label}」？`,
+        tf('Dlg.RemoveAccountConfirm', picked.label),
         { modal: true },
-        '移除',
+        t('Dlg.Remove'),
       );
-      if (answer !== '移除') {
+      if (answer !== t('Dlg.Remove')) {
         return;
       }
       await store.remove((picked as vscode.QuickPickItem & { id: string }).id);
+      void vscode.window.showInformationMessage(t('Msg.AccountRemoved'));
       await provider.refresh();
     }),
     vscode.commands.registerCommand('ollamaCloud.switchAccount', async (id: string) => {
       await store.setActive(id);
       await provider.refresh();
     }),
+    onLanguageChanged(() => {
+      // Language is baked into every rendered string, so refresh the views.
+      provider.refreshLanguage();
+    }),
     vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration(LANGUAGE_SETTING)) {
+        syncLanguage();
+      }
       if (e.affectsConfiguration(REFRESH_INTERVAL_SETTING)) {
         scheduleRefresh();
         // Re-render so the panel/tooltip show the new cadence right away.
         void provider.refresh();
+      }
+      if (e.affectsConfiguration(USAGE_PRECISION_SETTING)) {
+        // Precision only affects rendering; no need to hit the API again.
+        provider.refreshLanguage();
       }
     }),
   );

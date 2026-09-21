@@ -1,0 +1,17 @@
+{
+  "cmd.refresh": "Ollama Cloud: 刷新用量",
+  "cmd.addAccount": "Ollama Cloud: 添加账户",
+  "cmd.removeAccount": "Ollama Cloud: 移除账户",
+  "cmd.openPanel": "Ollama Cloud: 打开用量面板",
+  "cmd.setRefreshInterval": "Ollama Cloud: 设置自动刷新间隔",
+  "cmd.setUsagePrecision": "Ollama Cloud: 设置用量显示精度",
+  "cmd.toggleLanguage": "Ollama Cloud: 切换语言 (中/EN)",
+
+  "config.title": "Ollama Cloud 用量",
+  "config.refreshInterval": "自动刷新间隔（秒），范围 10–86400。多个 VS Code 窗口共享同一份用量缓存，缓存新鲜时不会重复请求。",
+  "config.usagePrecision": "用量百分比的小数位数，范围 0–4（默认 1）。仅影响显示，不影响请求。",
+  "config.language": "界面语言。默认跟随 VS Code 的显示语言。",
+  "config.language.auto": "跟随 VS Code 界面语言",
+  "config.language.zh": "简体中文",
+  "config.language.en": "English"
+}

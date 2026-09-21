@@ -3,7 +3,20 @@ import { fetchUsage, LimitUsage, ModelUsage, UsageResponse } from './api';
 import { AccountStore, AccountsState } from './accountStore';
 import { nextSessionResetMs, nextWeeklyResetMs } from './resetTime';
 import { SharedUsageCache, isCacheFresh } from './sharedCache';
-import { formatIntervalSeconds, getRefreshIntervalMs, getRefreshIntervalSeconds } from './config';
+import {
+  formatDuration,
+  formatIntervalSeconds,
+  formatSharePercent,
+  formatUsagePercent,
+  getRefreshIntervalMs,
+  getRefreshIntervalSeconds,
+  getUsagePrecision,
+  t,
+  tf,
+} from './config';
+import { getLanguage, tPeriod } from './localization';
+import { estimateRemainingRequests, estimateRemainingRequestsForModel, formatEstimate, modelWindowShare } from './quotaPredictor';
+import { BAR_CELLS, allocateBarCells, barColor } from './barLayout';
 
 // How long a window waits for the lock holder's fetch before falling back to
 // stale data (or fetching itself when nothing is cached yet).
@@ -48,37 +61,53 @@ function formatDate(value: string): string {
   }).format(date);
 }
 
-const PERIOD_TYPE_ZH: Record<string, string> = {
-  last_4_weeks: '最近 4 周',
-  last_7_days: '最近 7 天',
-  last_24_hours: '最近 24 小时',
-  daily: '每日',
-  weekly: '每周',
-  monthly: '每月',
-};
+const PERIOD_TYPE_FALLBACK = (type: string): string => type.replaceAll('_', ' ');
 
 function formatPeriodType(type: string): string {
-  return PERIOD_TYPE_ZH[type] ?? type.replaceAll('_', ' ');
+  const localized = tPeriod(type);
+  return localized ?? PERIOD_TYPE_FALLBACK(type);
 }
 
-function modelNodes(models: ModelUsage[]): UsageNode[] {
-  if (!models.length) {
-    return [{ label: '无模型请求', icon: 'circle-slash' }];
+function modelNodes(limit: LimitUsage): UsageNode[] {
+  if (!limit.models.length) {
+    return [{ label: t('Models.None'), icon: 'circle-slash' }];
   }
 
-  return models.map((model) => ({
-    label: model.name,
-    description: `${model.request_count.toLocaleString()} 次请求`,
-    icon: 'symbol-method',
-  }));
+  return limit.models.map((model) => {
+    const parts = [tf('Models.Requests', model.request_count.toLocaleString())];
+
+    // Share of the window quota (window usage × this model's request share).
+    const share = modelWindowShare(limit, model.request_count);
+    if (share !== undefined) {
+      parts.push(`${formatSharePercent(share)}%`);
+    }
+
+    // Remaining requests if this model were used exclusively.
+    const remaining = estimateRemainingRequestsForModel(limit, model.request_count);
+    if (remaining !== undefined) {
+      parts.push(`≈${formatEstimate(remaining)}`);
+    }
+
+    return {
+      label: model.name,
+      description: parts.join(' · '),
+      icon: 'symbol-method',
+    };
+  });
 }
 
 function limitNode(name: string, limit: LimitUsage): UsageNode {
+  const parts = [tf('Tree.Usage', formatUsagePercent(limit.usage) + '%')];
+  const remaining = estimateRemainingRequests(limit);
+  if (remaining !== undefined) {
+    parts.push(`≈${formatEstimate(remaining)}`);
+  }
+
   return {
     label: name,
-    description: `用量: ${limit.usage}`,
+    description: parts.join(' · '),
     icon: 'dashboard',
-    children: modelNodes(limit.models),
+    children: modelNodes(limit),
   };
 }
 
@@ -86,29 +115,29 @@ function usageNodes(usage: UsageResponse): UsageNode[] {
   const period = usage.activity.period;
   return [
     {
-      label: '活动',
-      description: `费用: $${usage.activity.cost}`,
+      label: t('Tree.Activity'),
+      description: tf('Tree.Cost', usage.activity.cost),
       icon: 'graph',
       children: [
         {
           label: formatPeriodType(period.type),
           description: `${formatDate(period.starting_at)} – ${formatDate(period.ending_at)}`,
-          tooltip: `从 ${period.starting_at} 到 ${period.ending_at}`,
+          tooltip: tf('Tree.FromTo', period.starting_at, period.ending_at),
           icon: 'calendar',
         },
         {
-          label: '模型',
+          label: t('Tree.Models'),
           icon: 'symbol-class',
-          children: modelNodes(usage.activity.models),
+          children: modelNodes({ usage: usage.limits.session.usage, models: usage.activity.models }),
         },
       ],
     },
     {
-      label: '限额',
+      label: t('Tree.Limits'),
       icon: 'meter',
       children: [
-        limitNode('5 小时窗口', usage.limits.session),
-        limitNode('每周窗口', usage.limits.weekly),
+        limitNode(t('Hover.SessionWindow'), usage.limits.session),
+        limitNode(t('Hover.WeeklyWindow'), usage.limits.weekly),
       ],
     },
   ];
@@ -129,12 +158,8 @@ export interface DataUpdate {
   sessionResetMs: number;
   lastUpdatedMs: number;
   intervalSeconds: number;
-}
-
-const BLUE_PALETTE = ['#2563eb', '#3b82f6', '#4f46e5', '#60a5fa', '#1d4ed8', '#6366f1', '#818cf8', '#93c5fd'];
-
-function formatPercent(usage: number): string {
-  return `${Math.round(usage * 100)}%`;
+  usagePrecision: number;
+  language: string;
 }
 
 // Stacked bar: each model = one shade of blue. Filled cells = window usage %,
@@ -147,53 +172,85 @@ function barSegments(models: ModelUsage[], usage: number): string {
   if (!total) {
     return '—';
   }
-  const filledTotal = Math.round(18 * usage);
-  let allocated = 0;
-  const cells = models.map((m, i) => {
-    const isLast = i === models.length - 1;
-    const filled = isLast ? Math.max(0, filledTotal - allocated) : Math.round((filledTotal * m.request_count) / total);
-    allocated += filled;
-    return `<font color="${BLUE_PALETTE[i % BLUE_PALETTE.length]}">${'█'.repeat(filled)}</font>`;
-  });
-  cells.push(`<font color="#6e6e6e">${'░'.repeat(Math.max(0, 18 - filledTotal))}</font>`);
-  return cells.join('');
-}
 
-function formatReset(ms: number): string {
-  const s = Math.round(ms / 1000);
-  const m = Math.floor(s / 60);
-  const h = Math.floor(m / 60);
-  const days = Math.floor(h / 24);
-  if (days >= 1) {
-    return `${days} 天`;
-  }
-  if (h >= 1) {
-    return `${h} 小时${m % 60 ? ` ${m % 60} 分钟` : ''}`;
-  }
-  if (m >= 1) {
-    return `${m} 分钟`;
-  }
-  return `${s} 秒`;
+  const filledTotal = Math.round(BAR_CELLS * Math.max(0, Math.min(1, usage)));
+  const counts = allocateBarCells(models, filledTotal);
+  const cells = models.map((_, index) =>
+    `<font color="${barColor(index)}">${'█'.repeat(counts[index])}</font>`,
+  );
+  cells.push(`<font color="#6e6e6e">${'░'.repeat(Math.max(0, BAR_CELLS - filledTotal))}</font>`);
+  return cells.join('');
 }
 
 function formatClock(ms: number): string {
   return new Intl.DateTimeFormat(undefined, { timeStyle: 'medium' }).format(ms);
 }
 
+/**
+ * Per-model detail list, mirroring the Visual Studio extension's hover popup:
+ * colour dot, name, share of the window quota, request count, and the
+ * remaining-request estimate if that model were used exclusively.
+ */
+function modelListMarkdown(limit: LimitUsage): string[] {
+  if (!limit.models.length) {
+    return [`- ${t('Models.None')}`];
+  }
+
+  return limit.models.map((model, index) => {
+    const color = barColor(index);
+    const parts = [`<font color="${color}">●</font> ${model.name}`];
+
+    const share = modelWindowShare(limit, model.request_count);
+    if (share !== undefined) {
+      parts.push(`${formatSharePercent(share)}%`);
+    }
+
+    parts.push(tf('Models.Requests', model.request_count.toLocaleString()));
+
+    const remaining = estimateRemainingRequestsForModel(limit, model.request_count);
+    if (remaining !== undefined) {
+      parts.push(`≈${formatEstimate(remaining)}`);
+    }
+
+    // A Markdown list item keeps every model on its own line; a bare `\n`
+    // would be treated as a soft break and collapse the whole list into one line.
+    return `- ${parts.join(' · ')}`;
+  });
+}
+
+/** One window section: name, per-model bar, usage %, remaining estimate, reset countdown, model list. */
+function windowSection(label: string, limit: LimitUsage, reset: string): string[] {
+  const remaining = estimateRemainingRequests(limit);
+  const remainingText = remaining === undefined ? '' : `　·　${tf('Hover.Remaining', formatEstimate(remaining))}`;
+
+  // The bar is 40 cells wide and fills the tooltip, so the countdown must be
+  // pushed onto its own line with an explicit `<br>`: a bare `\n` would be a
+  // soft break (collapsed into the same line) and a blank line would split it
+  // into a separate paragraph with an oversized gap.
+  return [
+    `**${label}** — ${formatUsagePercent(limit.usage)}%${remainingText}`,
+    '',
+    `${barSegments(limit.models, limit.usage)}<br>*${t('Panel.ResetIn')}${reset}*`,
+    '',
+    ...modelListMarkdown(limit),
+  ];
+}
+
 function quotaTooltip(usage: UsageResponse, sessionResetMs: number, lastUpdatedMs: number, intervalSeconds: number): vscode.MarkdownString {
   const now = Date.now();
-  const sReset = sessionResetMs ? formatReset(sessionResetMs - now) : '—';
-  const wReset = formatReset(nextWeeklyResetMs(now) - now);
-  const updated = lastUpdatedMs ? `上次更新 ${formatClock(lastUpdatedMs)} · ` : '';
+  const sReset = sessionResetMs ? formatDuration(sessionResetMs - now) : '—';
+  const wReset = formatDuration(nextWeeklyResetMs(now) - now);
+  const updated = lastUpdatedMs ? tf('Hover.LastUpdated', formatClock(lastUpdatedMs)) : '';
+
   const md = new vscode.MarkdownString();
   md.isTrusted = true;
   md.supportHtml = true;
   md.supportThemeIcons = true;
-  md.appendMarkdown(`### $(dashboard) 配额\n\n`);
-  md.appendMarkdown(`| 窗口 | 占比 | 重置 |\n|:--|:--|:--|\n`);
-  md.appendMarkdown(`| 5 小时 | ${barSegments(usage.limits.session.models, usage.limits.session.usage)} **${formatPercent(usage.limits.session.usage)}** | ${sReset} |\n`);
-  md.appendMarkdown(`| 每周 | ${barSegments(usage.limits.weekly.models, usage.limits.weekly.usage)} **${formatPercent(usage.limits.weekly.usage)}** | ${wReset} |\n\n`);
-  md.appendMarkdown(`*${updated}每 ${formatIntervalSeconds(intervalSeconds)}自动刷新 · 点击打开详情。*`);
+  md.appendMarkdown(`### $(dashboard) ${t('Hover.Title')}\n\n`);
+  md.appendMarkdown(windowSection(t('Hover.SessionWindow'), usage.limits.session, sReset).join('\n'));
+  md.appendMarkdown(`\n\n---\n\n`);
+  md.appendMarkdown(windowSection(t('Hover.WeeklyWindow'), usage.limits.weekly, wReset).join('\n'));
+  md.appendMarkdown(`\n\n${tf('Hover.Refresh', formatIntervalSeconds(intervalSeconds))}${updated}`);
   return md;
 }
 
@@ -226,6 +283,8 @@ export class UsageTreeProvider implements vscode.TreeDataProvider<UsageTreeItem>
       sessionResetMs: this.sessionResetMs,
       lastUpdatedMs: this.lastUpdatedMs,
       intervalSeconds: getRefreshIntervalSeconds(),
+      usagePrecision: getUsagePrecision(),
+      language: getLanguage(),
     };
   }
 
@@ -237,7 +296,7 @@ export class UsageTreeProvider implements vscode.TreeDataProvider<UsageTreeItem>
     if (this.usage) {
       return quotaTooltip(this.usage, this.sessionResetMs, this.lastUpdatedMs, getRefreshIntervalSeconds());
     }
-    return new vscode.MarkdownString('Ollama Cloud 用量');
+    return new vscode.MarkdownString(t('StatusBar.NoData'));
   }
 
   async getAccounts(): Promise<AccountsState> {
@@ -255,17 +314,17 @@ export class UsageTreeProvider implements vscode.TreeDataProvider<UsageTreeItem>
     }
 
     if (this.loading) {
-      return [new UsageTreeItem({ label: '正在加载 Ollama 用量…', icon: 'loading~spin' })];
+      return [new UsageTreeItem({ label: t('Panel.Loading'), icon: 'loading~spin' })];
     }
 
     if (this.error) {
       return [new UsageTreeItem({
         label: this.error,
-        description: '添加账户',
+        description: t('Cmd.AddAccount'),
         icon: 'warning',
         command: {
           command: 'ollamaCloud.addAccount',
-          title: 'Ollama Cloud: 添加账户',
+          title: t('Cmd.AddAccount'),
         },
       })];
     }
@@ -283,6 +342,17 @@ export class UsageTreeProvider implements vscode.TreeDataProvider<UsageTreeItem>
     return this.inFlight;
   }
 
+  /**
+   * Re-render every view from cached data. Used when a display-only setting
+   * (language, usage precision) changes — no API call is needed because the
+   * underlying numbers did not change.
+   */
+  refreshLanguage(): void {
+    this.emitStatus();
+    this.onDidChangeTreeDataEmitter.fire(undefined);
+    this.emitData(this.loading);
+  }
+
   private applyUsage(usage: UsageResponse, fetchedAt: number): void {
     this.usage = usage;
     this.lastUpdatedMs = fetchedAt;
@@ -293,10 +363,12 @@ export class UsageTreeProvider implements vscode.TreeDataProvider<UsageTreeItem>
     if (!this.usage) {
       return;
     }
-    const sessionPct = Math.round(this.usage.limits.session.usage * 100);
-    const weeklyPct = Math.round(this.usage.limits.weekly.usage * 100);
     this.onDidChangeStatusEmitter.fire({
-      text: `$(dashboard) 5时:${sessionPct}% 周:${weeklyPct}%`,
+      text: `$(dashboard) ${tf(
+        'StatusBar.Text',
+        formatUsagePercent(this.usage.limits.session.usage),
+        formatUsagePercent(this.usage.limits.weekly.usage),
+      )}`,
       tooltip: this.buildTooltip(),
     });
   }
@@ -310,6 +382,8 @@ export class UsageTreeProvider implements vscode.TreeDataProvider<UsageTreeItem>
       sessionResetMs: this.sessionResetMs,
       lastUpdatedMs: this.lastUpdatedMs,
       intervalSeconds: getRefreshIntervalSeconds(),
+      usagePrecision: getUsagePrecision(),
+      language: getLanguage(),
     });
   }
 
@@ -317,7 +391,7 @@ export class UsageTreeProvider implements vscode.TreeDataProvider<UsageTreeItem>
     this.loading = true;
     this.error = undefined;
     this.onDidChangeTreeDataEmitter.fire(undefined);
-    this.onDidChangeStatusEmitter.fire({ text: '$(loading~spin) Ollama', tooltip: '正在加载 Ollama 用量…' });
+    this.onDidChangeStatusEmitter.fire({ text: `$(loading~spin) ${t('StatusBar.Loading')}`, tooltip: t('Panel.Loading') });
     this.accountsState = await this.store.load();
     this.sessionResetMs = nextSessionResetMs(Date.now());
     this.emitData(true);
@@ -326,7 +400,7 @@ export class UsageTreeProvider implements vscode.TreeDataProvider<UsageTreeItem>
       const active = await this.store.getActive();
       const apiKey = active?.key ?? process.env.OLLAMA_API_KEY;
       if (!apiKey) {
-        throw new Error('未找到 Ollama API 密钥。');
+        throw new Error(t('Err.NoApiKey'));
       }
 
       const cacheKey = active?.id ?? 'env';
@@ -373,13 +447,13 @@ export class UsageTreeProvider implements vscode.TreeDataProvider<UsageTreeItem>
       }
     } catch (error) {
       this.usage = undefined;
-      this.error = error instanceof Error ? error.message : '无法加载 Ollama 用量。';
+      this.error = error instanceof Error ? error.message : t('Err.LoadFailed');
       const errMd = new vscode.MarkdownString();
       errMd.supportHtml = true;
       errMd.supportThemeIcons = true;
-      errMd.appendMarkdown(`$(warning) **${this.error}**\n\n[添加账户](command:ollamaCloud.addAccount)`);
+      errMd.appendMarkdown(`$(warning) **${this.error}**\n\n[${t('Cmd.AddAccount')}](command:ollamaCloud.addAccount)`);
       this.onDidChangeStatusEmitter.fire({
-        text: '$(warning) Ollama',
+        text: `$(warning) ${t('StatusBar.NoData')}`,
         tooltip: errMd,
         backgroundColor: new vscode.ThemeColor('statusBarItem.errorBackground'),
       });

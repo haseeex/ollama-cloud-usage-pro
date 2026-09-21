@@ -1,19 +1,10 @@
 import * as vscode from 'vscode';
-import { ModelUsage } from './api';
+import { LimitUsage, ModelUsage } from './api';
 import { AccountsState } from './accountStore';
 import { DataUpdate } from './usageTreeProvider';
-import { formatIntervalSeconds } from './config';
-
-// Blue palette, one shade per model (by index).
-const PALETTE = ['#2563eb', '#3b82f6', '#4f46e5', '#60a5fa', '#1d4ed8', '#6366f1', '#818cf8', '#93c5fd'];
-
-function pct(usage: number): number {
-  return Math.round(usage * 100);
-}
-
-function colorFor(index: number): string {
-  return PALETTE[index % PALETTE.length];
-}
+import { formatIntervalSeconds, formatSharePercent, formatUsagePercent, t, tf } from './config';
+import { estimateRemainingRequests, estimateRemainingRequestsForModel, formatEstimate, modelWindowShare, windowCapacity } from './quotaPredictor';
+import { barColor } from './barLayout';
 
 function segmentsHtml(models: ModelUsage[], usage: number): string {
   if (!models.length) {
@@ -23,36 +14,52 @@ function segmentsHtml(models: ModelUsage[], usage: number): string {
   if (!total) {
     return '<div class="bar"></div>';
   }
-  const fillWidth = usage * 100; // filled portion = window usage %
+  const fillWidth = Math.max(0, Math.min(1, usage)) * 100; // filled portion = window usage %
   const segs = models.map((m, i) => {
     const w = (m.request_count / total) * fillWidth;
-    return `<div class="seg" style="width:${w}%;background:${colorFor(i)}" data-name="${escapeHtml(m.name)}" data-count="${m.request_count.toLocaleString()}"></div>`;
+    return `<div class="seg" style="width:${w}%;background:${barColor(i)}" data-name="${escapeHtml(m.name)}" data-count="${tf('Models.Requests', m.request_count.toLocaleString())}"></div>`;
   }).join('');
   return `<div class="bar">${segs}</div>`;
 }
 
-function rowHtml(label: string, usage: number, models: ModelUsage[], resetType: string): string {
+function rowHtml(label: string, limit: LimitUsage, resetType: string): string {
+  const remaining = estimateRemainingRequests(limit);
+  const remainingHtml = remaining === undefined
+    ? ''
+    : `<span class="row-remain" title="${escapeHtml(tf('Panel.RemainingTip', formatEstimate(remaining)))}">${escapeHtml(tf('Panel.Remaining', formatEstimate(remaining)))}</span>`;
   return `<div class="row">
     <div class="row-head">
       <span class="row-label">${label}</span>
-      <span class="row-pct">已用 ${pct(usage)}%</span>
+      <span class="row-right">${remainingHtml}<span class="row-pct">${escapeHtml(tf('Panel.Used', formatUsagePercent(limit.usage)))}</span></span>
     </div>
-    ${segmentsHtml(models, usage)}
-    <div class="reset">重置倒计时：<span data-reset="${resetType}">…</span></div>
+    ${segmentsHtml(limit.models, limit.usage)}
+    <div class="reset">${t('Panel.ResetIn')}<span data-reset="${resetType}">…</span></div>
   </div>`;
 }
 
-function modelListHtml(models: ModelUsage[]): string {
-  if (!models.length) {
-    return '<div class="empty">无模型请求</div>';
+function modelListHtml(limit: LimitUsage): string {
+  if (!limit.models.length) {
+    return `<div class="empty">${t('Models.None')}</div>`;
   }
-  return models.map((m, i) =>
-    `<div class="model">
-      <span class="dot" style="color:${colorFor(i)}">●</span>
+  return limit.models.map((m, i) => {
+    const share = modelWindowShare(limit, m.request_count);
+    const shareHtml = share === undefined
+      ? ''
+      : `<span class="model-share" title="${escapeHtml(tf('Models.WindowShareTip', formatSharePercent(share), formatUsagePercent(limit.usage)))}">${escapeHtml(tf('Models.WindowShare', formatSharePercent(share)))}</span>`;
+
+    const remaining = estimateRemainingRequestsForModel(limit, m.request_count);
+    const remainingHtml = remaining === undefined
+      ? ''
+      : `<span class="model-remain" title="${escapeHtml(tf('Models.RemainingTip', formatEstimate(windowCapacity(limit) ?? 0), formatEstimate(remaining)))}">${escapeHtml(tf('Models.Remaining', formatEstimate(remaining)))}</span>`;
+
+    return `<div class="model">
+      <span class="dot" style="color:${barColor(i)}">●</span>
       <span class="model-name">${escapeHtml(m.name)}</span>
-      <span class="model-count">${m.request_count.toLocaleString()} 次请求</span>
-    </div>`,
-  ).join('');
+      ${shareHtml}
+      <span class="model-count">${escapeHtml(tf('Models.Requests', m.request_count.toLocaleString()))}</span>
+      ${remainingHtml}
+    </div>`;
+  }).join('');
 }
 
 function accountsHtml(state: AccountsState): string {
@@ -61,8 +68,8 @@ function accountsHtml(state: AccountsState): string {
   ).join('');
   return `<div class="accounts">
     <select class="account-select" data-cmd="switchAccount">${opts}</select>
-    <button class="icon-btn" data-cmd="addAccount" title="添加账户">＋</button>
-    <button class="icon-btn" data-cmd="removeAccount" title="移除账户" ${state.accounts.length ? '' : 'disabled'}>－</button>
+    <button class="icon-btn" data-cmd="addAccount" title="${t('Panel.AddAccount')}">＋</button>
+    <button class="icon-btn" data-cmd="removeAccount" title="${t('Panel.RemoveAccount')}" ${state.accounts.length ? '' : 'disabled'}>－</button>
   </div>`;
 }
 
@@ -71,9 +78,9 @@ function escapeHtml(s: string): string {
 }
 
 function footerHtml(data: DataUpdate): string {
-  const parts = [`每 ${formatIntervalSeconds(data.intervalSeconds)}自动刷新`];
+  const parts = [tf('Panel.AutoRefresh', formatIntervalSeconds(data.intervalSeconds))];
   if (data.lastUpdatedMs) {
-    parts.push(`上次更新 ${new Intl.DateTimeFormat(undefined, { timeStyle: 'medium' }).format(data.lastUpdatedMs)}`);
+    parts.push(tf('Panel.LastUpdated', new Intl.DateTimeFormat(undefined, { timeStyle: 'medium' }).format(data.lastUpdatedMs)));
   }
   return `<div class="footer">${parts.join(' · ')}</div>`;
 }
@@ -81,34 +88,34 @@ function footerHtml(data: DataUpdate): string {
 function bodyHtml(data: DataUpdate): string {
   const { usage, error, loading, accounts } = data;
   const toolbar = `<div class="toolbar">
-    <h2>☁ 云端用量</h2>
+    <h2>${t('Panel.Title')}</h2>
     <div class="actions">
-      <button class="icon-btn" data-cmd="refresh" title="刷新">⟳</button>
-      <button class="icon-btn" data-cmd="setRefreshInterval" title="设置自动刷新间隔">⚙</button>
+      <button class="icon-btn" data-cmd="refresh" title="${t('Panel.Refresh')}">⟳</button>
+      <button class="icon-btn" data-cmd="setRefreshInterval" title="${t('Panel.Settings')}">⚙</button>
     </div>
   </div>
   ${accountsHtml(accounts)}`;
 
   let content: string;
   if (loading) {
-    content = `<div class="state">正在加载 Ollama 用量…</div>`;
+    content = `<div class="state">${t('Panel.Loading')}</div>`;
   } else if (error) {
     content = `<div class="state error">⚠ ${escapeHtml(error)}</div>
-      <button class="btn" data-cmd="addAccount">添加 API 密钥</button>`;
+      <button class="btn" data-cmd="addAccount">${t('Panel.AddKey')}</button>`;
   } else if (!usage) {
-    content = `<div class="state">暂无数据。</div>`;
+    content = `<div class="state">${t('Panel.NoData')}</div>`;
   } else {
     content = `
-    ${rowHtml('5 小时窗口用量', usage.limits.session.usage, usage.limits.session.models, 'session')}
+    ${rowHtml(t('Panel.SessionWindow'), usage.limits.session, 'session')}
     <div class="group">
-      <div class="group-label">本窗口使用的模型</div>
-      <div class="models">${modelListHtml(usage.limits.session.models)}</div>
+      <div class="group-label">${t('Panel.SessionModels')}</div>
+      <div class="models">${modelListHtml(usage.limits.session)}</div>
     </div>
     <div class="spacer"></div>
-    ${rowHtml('每周窗口用量', usage.limits.weekly.usage, usage.limits.weekly.models, 'weekly')}
+    ${rowHtml(t('Panel.WeeklyWindow'), usage.limits.weekly, 'weekly')}
     <div class="group">
-      <div class="group-label">本周使用的模型</div>
-      <div class="models">${modelListHtml(usage.limits.weekly.models)}</div>
+      <div class="group-label">${t('Panel.WeeklyModels')}</div>
+      <div class="models">${modelListHtml(usage.limits.weekly)}</div>
     </div>`;
   }
   return `${toolbar}${content}${footerHtml(data)}`;
@@ -128,7 +135,9 @@ const CSS = `
   .row { margin-bottom: 16px; }
   .row-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
   .row-label { font-size: 13px; font-weight: 500; }
-  .row-pct { font-size: 12px; font-weight: 600; }
+  .row-right { display: flex; align-items: baseline; gap: 8px; }
+  .row-remain { font-size: 11px; color: var(--vscode-descriptionForeground); font-variant-numeric: tabular-nums; cursor: help; }
+  .row-pct { font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
   .reset { font-size: 11px; color: var(--vscode-descriptionForeground); margin-top: 4px; font-variant-numeric: tabular-nums; }
   .bar { background: var(--vscode-scrollbarSlider-background); border-radius: 6px; height: 6px; overflow: hidden; display: flex; }
   .seg { height: 6px; transition: width .3s ease; cursor: default; }
@@ -139,8 +148,9 @@ const CSS = `
   .models { display: flex; flex-direction: column; gap: 6px; }
   .model { display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 3px 0; }
   .dot { font-size: 10px; line-height: 1; }
-  .model-name { flex: 1; }
-  .model-count { color: var(--vscode-descriptionForeground); font-variant-numeric: tabular-nums; }
+  .model-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .model-share, .model-count, .model-remain { color: var(--vscode-descriptionForeground); font-variant-numeric: tabular-nums; cursor: help; }
+  .model-remain { min-width: 68px; text-align: right; }
   .state { padding: 20px 0; text-align: center; color: var(--vscode-descriptionForeground); }
   .state.error { color: #f48771; }
   .btn { margin-top: 12px; padding: 6px 12px; background: var(--vscode-button-background); color: var(--vscode-button-foreground); border: none; border-radius: 4px; cursor: pointer; font-size: 12px; }
@@ -159,7 +169,7 @@ export class UsagePanel {
     }
     this.panel = vscode.window.createWebviewPanel(
       'ollamaCloudUsage',
-      'Ollama Cloud 用量',
+      t('Window.Title'),
       vscode.ViewColumn.Active,
       { enableScripts: true, retainContextWhenHidden: true },
     );
@@ -184,8 +194,22 @@ export class UsagePanel {
     if (!this.panel) {
       return;
     }
+    this.panel.title = t('Window.Title');
+    // The webview runs in its own context and cannot import our modules, so
+    // the countdown strings it needs are injected as a JSON literal.
+    const countdown = {
+      days: t('Time.Days'),
+      hours: t('Time.Hours'),
+      hoursMinutes: t('Time.HoursMinutes'),
+      minutes: t('Time.Minutes'),
+      seconds: t('Time.Seconds'),
+    };
     const script = `<script>
       const vscode = acquireVsCodeApi();
+      const CD = ${JSON.stringify(countdown)};
+      function fill(template, value, extra) {
+        return template.replace('{0}', value).replace('{1}', extra === undefined ? '' : extra);
+      }
       document.body.addEventListener('click', (e) => {
         const btn = e.target.closest('button[data-cmd]');
         if (btn) { vscode.postMessage({ cmd: btn.dataset.cmd }); }
@@ -197,7 +221,7 @@ export class UsagePanel {
       document.addEventListener('mouseover', (e) => {
         const seg = e.target.closest('.seg');
         if (!seg || !tip) { return; }
-        tip.innerHTML = '<strong>' + seg.dataset.name + '</strong><br>' + seg.dataset.count + ' 次请求';
+        tip.innerHTML = '<strong>' + seg.dataset.name + '</strong><br>' + seg.dataset.count;
         tip.style.display = 'block';
       });
       document.addEventListener('mousemove', (e) => {
@@ -219,10 +243,10 @@ export class UsagePanel {
         const m = Math.floor(s / 60);
         const h = Math.floor(m / 60);
         const days = Math.floor(h / 24);
-        if (days >= 1) { return days + ' 天'; }
-        if (h >= 1) { return h + ' 小时' + (m % 60 ? ' ' + (m % 60) + ' 分钟' : ''); }
-        if (m >= 1) { return m + ' 分钟'; }
-        return s + ' 秒';
+        if (days >= 1) { return fill(CD.days, days); }
+        if (h >= 1) { return m % 60 ? fill(CD.hoursMinutes, h, m % 60) : fill(CD.hours, h); }
+        if (m >= 1) { return fill(CD.minutes, m); }
+        return fill(CD.seconds, s);
       }
       function tick() {
         const now = Date.now();

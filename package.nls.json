@@ -1,0 +1,17 @@
+{
+  "cmd.refresh": "Ollama Cloud: Refresh Usage",
+  "cmd.addAccount": "Ollama Cloud: Add Account",
+  "cmd.removeAccount": "Ollama Cloud: Remove Account",
+  "cmd.openPanel": "Ollama Cloud: Open Usage Panel",
+  "cmd.setRefreshInterval": "Ollama Cloud: Set Refresh Interval",
+  "cmd.setUsagePrecision": "Ollama Cloud: Set Usage Display Precision",
+  "cmd.toggleLanguage": "Ollama Cloud: Switch Language (中/EN)",
+
+  "config.title": "Ollama Cloud Usage",
+  "config.refreshInterval": "Auto-refresh interval in seconds (10–86400). All VS Code windows share one usage cache, so fresh data is not re-fetched.",
+  "config.usagePrecision": "Decimal places for the usage percentage (0–4, default 1). Display only — does not affect requests.",
+  "config.language": "UI language. Defaults to following VS Code's display language.",
+  "config.language.auto": "Follow VS Code display language",
+  "config.language.zh": "简体中文",
+  "config.language.en": "English"
+}

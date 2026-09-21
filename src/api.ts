@@ -1,4 +1,5 @@
 import * as https from 'node:https';
+import { t, tf } from './localization';
 
 const USAGE_URL = 'https://ollama.com/api/usage';
 const MAX_RESPONSE_BYTES = 1_048_576;
@@ -40,7 +41,7 @@ export class UsageApiError extends Error {
 
 function asRecord(value: unknown, name: string): UnknownRecord {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
-    throw new UsageApiError(`Ollama 响应中的 ${name} 无效。`);
+    throw new UsageApiError(tf('Err.InvalidField', name));
   }
 
   return value as UnknownRecord;
@@ -48,7 +49,7 @@ function asRecord(value: unknown, name: string): UnknownRecord {
 
 function asString(value: unknown, name: string): string {
   if (typeof value !== 'string') {
-    throw new UsageApiError(`Ollama 响应中的 ${name} 无效。`);
+    throw new UsageApiError(tf('Err.InvalidField', name));
   }
 
   return value;
@@ -56,7 +57,7 @@ function asString(value: unknown, name: string): string {
 
 function asNumber(value: unknown, name: string): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) {
-    throw new UsageApiError(`Ollama 响应中的 ${name} 无效。`);
+    throw new UsageApiError(tf('Err.InvalidField', name));
   }
 
   return value;
@@ -64,7 +65,7 @@ function asNumber(value: unknown, name: string): number {
 
 function parseModels(value: unknown, name: string): ModelUsage[] {
   if (!Array.isArray(value)) {
-    throw new UsageApiError(`Ollama 响应中的 ${name} 无效。`);
+    throw new UsageApiError(tf('Err.InvalidField', name));
   }
 
   return value.map((model, index) => {
@@ -109,7 +110,7 @@ export function parseUsage(value: unknown): UsageResponse {
 
 export async function fetchUsage(apiKey: string): Promise<UsageResponse> {
   if (!apiKey.trim()) {
-    throw new UsageApiError('Ollama API 密钥为空。');
+    throw new UsageApiError(t('Err.EmptyKey'));
   }
 
   return new Promise((resolve, reject) => {
@@ -126,7 +127,7 @@ export async function fetchUsage(apiKey: string): Promise<UsageResponse> {
       response.on('data', (chunk: string) => {
         size += Buffer.byteLength(chunk);
         if (size > MAX_RESPONSE_BYTES) {
-          response.destroy(new UsageApiError('Ollama 响应过大。'));
+          response.destroy(new UsageApiError(t('Err.ResponseTooLarge')));
           return;
         }
         body += chunk;
@@ -134,19 +135,19 @@ export async function fetchUsage(apiKey: string): Promise<UsageResponse> {
       response.on('error', reject);
       response.on('end', () => {
         if (response.statusCode !== 200) {
-          reject(new UsageApiError(`Ollama 返回 HTTP ${response.statusCode ?? '未知'}。`));
+          reject(new UsageApiError(tf('Err.HttpStatus', response.statusCode ?? '?')));
           return;
         }
 
         try {
           resolve(parseUsage(JSON.parse(body)));
         } catch (error) {
-          reject(error instanceof Error ? error : new UsageApiError('Ollama 响应无效。'));
+          reject(error instanceof Error ? error : new UsageApiError(t('Err.InvalidResponse')));
         }
       });
     });
 
-    request.setTimeout(10_000, () => request.destroy(new UsageApiError('Ollama 请求超时。')));
+    request.setTimeout(10_000, () => request.destroy(new UsageApiError(t('Err.Timeout'))));
     request.on('error', reject);
     request.end();
   });
