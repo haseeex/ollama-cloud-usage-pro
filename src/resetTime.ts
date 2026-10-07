@@ -1,15 +1,16 @@
-// Reset boundaries are epoch-aligned in UTC (server-side model).
-// Session: 5h rolling window anchored at 00:00 UTC (boundaries 00/05/10/15/20 UTC).
-// Weekly: 7-day window. Unix epoch (1970-01-01) is Thursday 00:00 UTC, so we shift
-// the anchor back 4 days to Monday 00:00 UTC.
-const SESSION_WINDOW_MS = 5 * 3600_000;
-const WEEK_MS = 7 * 86400_000;
-const WEEK_ANCHOR_OFFSET_MS = 4 * 86400_000;
+// Window math for the documented balance endpoint.
+//
+// `resets_at` in `GET /api/balance` is the exclusive end of the current
+// window, so the window covers [resets_at − windowLength, resets_at) and the
+// requests made so far are the usage buckets overlapping that interval.
 
-export function nextSessionResetMs(now: number): number {
-  return now + (SESSION_WINDOW_MS - (now % SESSION_WINDOW_MS));
-}
+/** 5-hour session window used by legacy plans. */
+export const SESSION_WINDOW_MS = 5 * 3600_000;
 
-export function nextWeeklyResetMs(now: number): number {
-  return now + (WEEK_MS - ((now - WEEK_ANCHOR_OFFSET_MS) % WEEK_MS));
+/** 7-day weekly window used by legacy plans. */
+export const WEEK_MS = 7 * 86400_000;
+
+/** Start (epoch ms) of the window that ends at `resetAtMs`. */
+export function windowStartMs(resetAtMs: number, windowMs: number): number {
+  return resetAtMs - windowMs;
 }

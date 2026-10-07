@@ -1,65 +1,97 @@
 import * as vscode from 'vscode';
-import { LimitUsage, ModelUsage } from './api';
+import {
+  CreditsIncludedBalance,
+  UsageBucket,
+  UsageMetrics,
+  UsageSnapshot,
+  isLegacyIncluded,
+  parseTimestampMs,
+  sumRequestsInRange,
+} from './api';
 import { AccountsState } from './accountStore';
 import { DataUpdate } from './usageTreeProvider';
-import { formatIntervalSeconds, formatSharePercent, formatUsagePercent, t, tf } from './config';
-import { estimateRemainingRequests, estimateRemainingRequestsForModel, formatEstimate, modelWindowShare, windowCapacity } from './quotaPredictor';
-import { barColor } from './barLayout';
+import { SESSION_WINDOW_MS, WEEK_MS, windowStartMs } from './resetTime';
+import { formatIntervalSeconds, formatUsagePercent, t, tf } from './config';
+import { estimateRemainingRequests, formatEstimate } from './quotaPredictor';
+import { sparkline, usageColor } from './barLayout';
 
-function segmentsHtml(models: ModelUsage[], usage: number): string {
-  if (!models.length) {
-    return '<div class="bar"></div>';
-  }
-  const total = models.reduce((s, m) => s + m.request_count, 0);
-  if (!total) {
-    return '<div class="bar"></div>';
-  }
-  const fillWidth = Math.max(0, Math.min(1, usage)) * 100; // filled portion = window usage %
-  const segs = models.map((m, i) => {
-    const w = (m.request_count / total) * fillWidth;
-    return `<div class="seg" style="width:${w}%;background:${barColor(i)}" data-name="${escapeHtml(m.name)}" data-count="${tf('Models.Requests', m.request_count.toLocaleString())}"></div>`;
-  }).join('');
-  return `<div class="bar">${segs}</div>`;
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
 }
 
-function rowHtml(label: string, limit: LimitUsage, resetType: string): string {
-  const remaining = estimateRemainingRequests(limit);
-  const remainingHtml = remaining === undefined
+/** A quota window distilled from the balance endpoint plus the usage buckets. */
+interface WindowSummary {
+  used: number;
+  requests: number;
+  resetMs: number;
+  estimate: number | undefined;
+}
+
+function usedFraction(remainingPercent: number): number {
+  return Math.max(0, Math.min(1, (100 - remainingPercent) / 100));
+}
+
+function summarizeWindow(
+  remainingPercent: number,
+  resetsAt: string,
+  windowMs: number,
+  buckets: UsageBucket[],
+): WindowSummary {
+  const resetMs = parseTimestampMs(resetsAt);
+  const used = usedFraction(remainingPercent);
+  const requests = resetMs ? sumRequestsInRange(buckets, windowStartMs(resetMs, windowMs), resetMs) : 0;
+  return { used, requests, resetMs, estimate: estimateRemainingRequests(requests, used) };
+}
+
+/** Single-colour usage bar with the used percentage. */
+function barHtml(used: number): string {
+  const width = (Math.max(0, Math.min(1, used)) * 100).toFixed(2);
+  return `<div class="bar"><div class="fill" style="width:${width}%;background:${usageColor(used)}"></div></div>`;
+}
+
+/** One quota window row: label, used %, bar, reset countdown, request count. */
+function windowRowHtml(label: string, summary: WindowSummary): string {
+  const remaining = summary.estimate === undefined
     ? ''
-    : `<span class="row-remain" title="${escapeHtml(tf('Panel.RemainingTip', formatEstimate(remaining)))}">${escapeHtml(tf('Panel.Remaining', formatEstimate(remaining)))}</span>`;
+    : `<span class="row-remain">${escapeHtml(tf('Panel.Remaining', formatEstimate(summary.estimate)))}</span>`;
   return `<div class="row">
     <div class="row-head">
       <span class="row-label">${label}</span>
-      <span class="row-right">${remainingHtml}<span class="row-pct">${escapeHtml(tf('Panel.Used', formatUsagePercent(limit.usage)))}</span></span>
+      <span class="row-right">${remaining}<span class="row-pct">${escapeHtml(tf('Panel.Used', formatUsagePercent(summary.used)))}</span></span>
     </div>
-    ${segmentsHtml(limit.models, limit.usage)}
-    <div class="reset">${t('Panel.ResetIn')}<span data-reset="${resetType}">…</span></div>
+    ${barHtml(summary.used)}
+    <div class="reset">${t('Panel.ResetIn')}<span data-reset-at="${summary.resetMs}">…</span></div>
+    <div class="row-count">${escapeHtml(tf('Usage.Requests', summary.requests.toLocaleString()))}</div>
   </div>`;
 }
 
-function modelListHtml(limit: LimitUsage): string {
-  if (!limit.models.length) {
-    return `<div class="empty">${t('Models.None')}</div>`;
-  }
-  return limit.models.map((m, i) => {
-    const share = modelWindowShare(limit, m.request_count);
-    const shareHtml = share === undefined
-      ? ''
-      : `<span class="model-share" title="${escapeHtml(tf('Models.WindowShareTip', formatSharePercent(share), formatUsagePercent(limit.usage)))}">${escapeHtml(tf('Models.WindowShare', formatSharePercent(share)))}</span>`;
+/** Credit-plan row: included allowance progress plus purchased balance. */
+function creditsRowHtml(included: CreditsIncludedBalance, purchasedUsd: number): string {
+  const total = included.allowance_usd;
+  const used = total > 0 ? Math.max(0, Math.min(1, (total - included.balance_usd) / total)) : 0;
+  const resetMs = parseTimestampMs(included.period.until);
+  return `<div class="row">
+    <div class="row-head">
+      <span class="row-label">${t('Panel.IncludedCredits')}</span>
+      <span class="row-right"><span class="row-pct">${escapeHtml(tf('Panel.Used', formatUsagePercent(used)))}</span></span>
+    </div>
+    ${barHtml(used)}
+    <div class="reset">${t('Panel.ResetIn')}<span data-reset-at="${resetMs}">…</span></div>
+    <div class="row-count">${escapeHtml(tf('Usage.Included', included.balance_usd.toFixed(2), total.toFixed(2)))}</div>
+    <div class="row-count">${escapeHtml(tf('Usage.Balance', purchasedUsd.toFixed(2)))}</div>
+  </div>`;
+}
 
-    const remaining = estimateRemainingRequestsForModel(limit, m.request_count);
-    const remainingHtml = remaining === undefined
-      ? ''
-      : `<span class="model-remain" title="${escapeHtml(tf('Models.RemainingTip', formatEstimate(windowCapacity(limit) ?? 0), formatEstimate(remaining)))}">${escapeHtml(tf('Models.Remaining', formatEstimate(remaining)))}</span>`;
-
-    return `<div class="model">
-      <span class="dot" style="color:${barColor(i)}">●</span>
-      <span class="model-name">${escapeHtml(m.name)}</span>
-      ${shareHtml}
-      <span class="model-count">${escapeHtml(tf('Models.Requests', m.request_count.toLocaleString()))}</span>
-      ${remainingHtml}
-    </div>`;
-  }).join('');
+/** Request history sparkline with total and peak labels. */
+function chartHtml(title: string, buckets: UsageBucket[]): string {
+  const values = buckets.map((bucket) => bucket.request_count);
+  const total = values.reduce((sum, value) => sum + value, 0);
+  const peak = values.reduce((max, value) => (value > max ? value : max), 0);
+  return `<div class="group">
+    <div class="group-label">${title}</div>
+    <div class="chart">${sparkline(values)}</div>
+    <div class="chart-meta">${escapeHtml(tf('Usage.Requests', total.toLocaleString()))} · ${escapeHtml(tf('Usage.Peak', peak.toLocaleString()))}</div>
+  </div>`;
 }
 
 function accountsHtml(state: AccountsState): string {
@@ -71,10 +103,6 @@ function accountsHtml(state: AccountsState): string {
     <button class="icon-btn" data-cmd="addAccount" title="${t('Panel.AddAccount')}">＋</button>
     <button class="icon-btn" data-cmd="removeAccount" title="${t('Panel.RemoveAccount')}" ${state.accounts.length ? '' : 'disabled'}>－</button>
   </div>`;
-}
-
-function escapeHtml(s: string): string {
-  return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
 }
 
 function footerHtml(data: DataUpdate): string {
@@ -104,19 +132,29 @@ function bodyHtml(data: DataUpdate): string {
       <button class="btn" data-cmd="addAccount">${t('Panel.AddKey')}</button>`;
   } else if (!usage) {
     content = `<div class="state">${t('Panel.NoData')}</div>`;
+  } else if (isLegacyIncluded(usage.balance.included)) {
+    const session = summarizeWindow(
+      usage.balance.included.session.remaining_percent,
+      usage.balance.included.session.resets_at,
+      SESSION_WINDOW_MS,
+      usage.hourly.buckets,
+    );
+    const weekly = summarizeWindow(
+      usage.balance.included.weekly.remaining_percent,
+      usage.balance.included.weekly.resets_at,
+      WEEK_MS,
+      usage.daily.buckets,
+    );
+    content = `
+    ${windowRowHtml(t('Panel.SessionWindow'), session)}
+    <div class="spacer"></div>
+    ${windowRowHtml(t('Panel.WeeklyWindow'), weekly)}
+    ${chartHtml(t('Usage.HourlyTitle'), usage.hourly.buckets)}
+    ${chartHtml(t('Usage.DailyTitle'), usage.daily.buckets)}`;
   } else {
     content = `
-    ${rowHtml(t('Panel.SessionWindow'), usage.limits.session, 'session')}
-    <div class="group">
-      <div class="group-label">${t('Panel.SessionModels')}</div>
-      <div class="models">${modelListHtml(usage.limits.session)}</div>
-    </div>
-    <div class="spacer"></div>
-    ${rowHtml(t('Panel.WeeklyWindow'), usage.limits.weekly, 'weekly')}
-    <div class="group">
-      <div class="group-label">${t('Panel.WeeklyModels')}</div>
-      <div class="models">${modelListHtml(usage.limits.weekly)}</div>
-    </div>`;
+    ${creditsRowHtml(usage.balance.included, usage.balance.purchased.balance_usd)}
+    ${chartHtml(t('Usage.DailyTitle'), usage.daily.buckets)}`;
   }
   return `${toolbar}${content}${footerHtml(data)}`;
 }
@@ -139,8 +177,11 @@ const CSS = `
   .row-remain { font-size: 11px; color: var(--vscode-descriptionForeground); font-variant-numeric: tabular-nums; cursor: help; }
   .row-pct { font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
   .reset { font-size: 11px; color: var(--vscode-descriptionForeground); margin-top: 4px; font-variant-numeric: tabular-nums; }
-  .bar { background: var(--vscode-scrollbarSlider-background); border-radius: 6px; height: 6px; overflow: hidden; display: flex; }
-  .seg { height: 6px; transition: width .3s ease; cursor: default; }
+  .row-count { font-size: 11px; color: var(--vscode-descriptionForeground); margin-top: 2px; font-variant-numeric: tabular-nums; }
+  .bar { background: var(--vscode-scrollbarSlider-background); border-radius: 6px; height: 6px; overflow: hidden; }
+  .fill { height: 6px; transition: width .3s ease; }
+  .chart { font-family: monospace; font-size: 13px; line-height: 1.2; letter-spacing: 0.5px; color: var(--vscode-charts-blue, #2563eb); overflow: hidden; white-space: nowrap; }
+  .chart-meta { font-size: 11px; color: var(--vscode-descriptionForeground); margin-top: 4px; font-variant-numeric: tabular-nums; }
   #tip { display: none; position: fixed; z-index: 10; background: var(--vscode-editorHoverWidget-background); color: var(--vscode-editorHoverWidget-foreground); border: 1px solid var(--vscode-editorHoverWidget-border); border-radius: 4px; padding: 6px 8px; font-size: 12px; font-variant-numeric: tabular-nums; pointer-events: none; box-shadow: 0 2px 8px rgba(0,0,0,.3); }
   .group { margin-top: 20px; }
   .spacer { height: 20px; }
@@ -231,13 +272,8 @@ export class UsagePanel {
         if (e.target.closest('.seg') && tip) { tip.style.display = 'none'; }
       });
 
-      // Epoch-aligned UTC boundaries: session 5h (00/05/10/15/20 UTC),
-      // weekly 7d anchored to Monday 00:00 UTC (epoch Thursday shifted -4d).
-      const SESSION_WINDOW_MS = 5 * 3600000;
-      const WEEK_MS = 7 * 86400000;
-      const WEEK_ANCHOR_OFFSET_MS = 4 * 86400000;
-      function nextSessionReset(now) { return now + (SESSION_WINDOW_MS - (now % SESSION_WINDOW_MS)); }
-      function nextWeeklyReset(now) { return now + (WEEK_MS - ((now - WEEK_ANCHOR_OFFSET_MS) % WEEK_MS)); }
+      // Reset countdowns target the authoritative resets_at timestamps from
+      // the balance endpoint, injected as absolute epoch ms per row.
       function format(ms) {
         const s = Math.round(ms / 1000);
         const m = Math.floor(s / 60);
@@ -250,13 +286,9 @@ export class UsagePanel {
       }
       function tick() {
         const now = Date.now();
-        document.querySelectorAll('[data-reset]').forEach(el => {
-          const type = el.dataset.reset;
-          if (type === 'session') {
-            el.textContent = format(nextSessionReset(now) - now);
-          } else {
-            el.textContent = format(nextWeeklyReset(now) - now);
-          }
+        document.querySelectorAll('[data-reset-at]').forEach(el => {
+          const target = Number(el.dataset.resetAt);
+          el.textContent = target > now ? format(target - now) : format(0);
         });
       }
       tick();

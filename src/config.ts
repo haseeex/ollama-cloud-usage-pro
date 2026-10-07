@@ -47,28 +47,6 @@ export function formatUsagePercent(usage: number): string {
   return value.toFixed(getUsagePrecision());
 }
 
-/**
- * Format a share percentage (a model's slice of the window quota). Shares are
- * usually far smaller than total usage (e.g. 0.0167%), so if the configured
- * precision would render it as 0 we raise precision until it is visible
- * (capped at the maximum) rather than showing a misleading "0.0%".
- */
-export function formatSharePercent(fraction: number): string {
-  const value = fraction < 0 ? 0 : fraction * 100;
-  let precision = getUsagePrecision();
-  let text = value.toFixed(precision);
-
-  while (value > 0 && precision < MAX_USAGE_PRECISION) {
-    if (Number.parseFloat(text) !== 0) {
-      break;
-    }
-    precision++;
-    text = value.toFixed(precision);
-  }
-
-  return text;
-}
-
 export function formatIntervalSeconds(seconds: number): string {
   if (seconds % 3600 === 0 && seconds >= 3600) {
     return tf('Interval.Hours', seconds / 3600);

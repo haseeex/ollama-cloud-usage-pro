@@ -43,6 +43,7 @@ export function isChinese(): boolean {
 const EN: Record<string, string> = {
   // Status bar
   'StatusBar.Text': 'Ollama  5h: {0}%  Wk: {1}%',
+  'StatusBar.Credits': 'Ollama  Credits: {0}%',
   'StatusBar.Loading': 'Ollama …',
   'StatusBar.NoData': 'Ollama —',
   'StatusBar.Tooltip': 'Open Ollama Cloud usage panel',
@@ -70,8 +71,6 @@ const EN: Record<string, string> = {
   'Panel.AddKey': 'Add API key',
   'Panel.SessionWindow': '5-hour window usage',
   'Panel.WeeklyWindow': 'Weekly window usage',
-  'Panel.SessionModels': 'Models this window',
-  'Panel.WeeklyModels': 'Models this week',
   'Panel.Used': 'Used {0}%',
   'Panel.Remaining': '≈{0} req. left',
   'Panel.RemainingTip':
@@ -81,17 +80,22 @@ const EN: Record<string, string> = {
   'Panel.ResetIn': 'Resets in: ',
   'Panel.AutoRefresh': 'Auto-refresh every {0}',
   'Panel.LastUpdated': 'Last updated {0}',
+  'Panel.IncludedCredits': 'Included credits',
 
   // Models
-  'Models.None': 'No model requests',
   'Models.Requests': '{0} req.',
-  'Models.WindowShare': '{0}%',
-  'Models.WindowShareTip':
-    "This model accounts for {0}% of the window's quota (window usage {1}% × this model's share of requests)",
-  'Models.Remaining': '· ≈{0} left',
-  'Models.RemainingTip':
-    'If this model were used exclusively: window capacity {0} − requests already made by this model = about {1} more requests left',
 
+  // Cloud usage (documented /api/usage + /api/balance)
+  'Usage.24h': 'Last 24 hours',
+  'Usage.7d': 'Last 7 days',
+  'Usage.Requests': '{0} requests',
+  'Usage.Cost': ' · ${0}',
+  'Usage.HourlyTitle': 'Requests per hour',
+  'Usage.DailyTitle': 'Requests per day',
+  'Usage.Credits': 'Purchased credits',
+  'Usage.Balance': 'Balance ${0}',
+  'Usage.Included': 'Included ${0} of ${1}',
+  'Usage.IncludedShort': 'Included ${0} / ${1}',  'Usage.Peak': 'Peak {0}',
   // Time
   'Time.Days': '{0} d',
   'Time.Hours': '{0} h',
@@ -145,27 +149,20 @@ const EN: Record<string, string> = {
   'Err.ResponseTooLarge': 'Ollama response too large.',
   'Err.InvalidResponse': 'Invalid Ollama response.',
   'Err.InvalidField': 'Invalid {0} in Ollama response.',
+  'Err.RateLimited': 'Ollama rate limit reached. Retry in {0}s.',
 
   // Period types
-  'Period.last_4_weeks': 'Last 4 weeks',
-  'Period.last_7_days': 'Last 7 days',
-  'Period.last_24_hours': 'Last 24 hours',
-  'Period.daily': 'Daily',
-  'Period.weekly': 'Weekly',
-  'Period.monthly': 'Monthly',
 
   // Tree
   'Tree.Activity': 'Activity',
-  'Tree.Cost': 'Cost: ${0}',
-  'Tree.Models': 'Models',
   'Tree.Limits': 'Limits',
   'Tree.Usage': 'Usage: {0}',
-  'Tree.FromTo': 'From {0} to {1}',
 };
 
 const ZH: Record<string, string> = {
   // Status bar
   'StatusBar.Text': 'Ollama  5时: {0}%  周: {1}%',
+  'StatusBar.Credits': 'Ollama  额度: {0}%',
   'StatusBar.Loading': 'Ollama …',
   'StatusBar.NoData': 'Ollama —',
   'StatusBar.Tooltip': '打开 Ollama Cloud 用量面板',
@@ -192,8 +189,6 @@ const ZH: Record<string, string> = {
   'Panel.AddKey': '添加 API 密钥',
   'Panel.SessionWindow': '5 小时窗口用量',
   'Panel.WeeklyWindow': '每周窗口用量',
-  'Panel.SessionModels': '本窗口使用的模型',
-  'Panel.WeeklyModels': '本周使用的模型',
   'Panel.Used': '已用 {0}%',
   'Panel.Remaining': '剩余约 {0} 次',
   'Panel.RemainingTip': '按当前窗口平均消耗估算：重置前还可请求约 {0} 次（总请求数 ÷ 已用比例 − 总请求数）',
@@ -202,14 +197,23 @@ const ZH: Record<string, string> = {
   'Panel.ResetIn': '重置倒计时：',
   'Panel.AutoRefresh': '每 {0}自动刷新',
   'Panel.LastUpdated': '上次更新 {0}',
+  'Panel.IncludedCredits': '包含额度',
 
   // Models
-  'Models.None': '无模型请求',
   'Models.Requests': '{0} 次',
-  'Models.WindowShare': '{0}%',
-  'Models.WindowShareTip': '该模型占用窗口 {0}% 的配额（窗口用量 {1}% × 该模型请求占比）',
-  'Models.Remaining': '· 剩余约 {0} 次',
-  'Models.RemainingTip': '若仅使用该模型：窗口容量 {0} 次 − 该模型已用次数 = 还可请求约 {1} 次',
+
+  // Cloud usage (documented /api/usage + /api/balance)
+  'Usage.24h': '最近 24 小时',
+  'Usage.7d': '最近 7 天',
+  'Usage.Requests': '{0} 次请求',
+  'Usage.Cost': ' · ${0}',
+  'Usage.HourlyTitle': '每小时请求数',
+  'Usage.DailyTitle': '每天请求数',
+  'Usage.Credits': '购买的额度',
+  'Usage.Balance': '余额 ${0}',
+  'Usage.Included': '包含额度 ${0} / ${1}',
+  'Usage.IncludedShort': '包含额度 ${0} / {1}',
+  'Usage.Peak': '峰值 {0}',
 
   // Time
   'Time.Days': '{0} 天',
@@ -264,22 +268,14 @@ const ZH: Record<string, string> = {
   'Err.ResponseTooLarge': 'Ollama 响应过大。',
   'Err.InvalidResponse': 'Ollama 响应无效。',
   'Err.InvalidField': 'Ollama 响应中的 {0} 无效。',
+  'Err.RateLimited': 'Ollama 请求频率超限，请 {0} 秒后重试。',
 
   // Period types
-  'Period.last_4_weeks': '最近 4 周',
-  'Period.last_7_days': '最近 7 天',
-  'Period.last_24_hours': '最近 24 小时',
-  'Period.daily': '每日',
-  'Period.weekly': '每周',
-  'Period.monthly': '每月',
 
   // Tree
   'Tree.Activity': '活动',
-  'Tree.Cost': '费用: ${0}',
-  'Tree.Models': '模型',
   'Tree.Limits': '限额',
   'Tree.Usage': '用量: {0}',
-  'Tree.FromTo': '从 {0} 到 {1}',
 };
 
 /** Look up a localized string (no arguments). */
@@ -295,11 +291,4 @@ export function tf(key: string, ...args: (string | number)[]): string {
     const value = args[Number(index)];
     return value === undefined ? match : String(value);
   });
-}
-
-/** Localized period type, falling back to a prettified raw value. */
-export function tPeriod(type: string): string {
-  const key = `Period.${type}`;
-  const localized = t(key);
-  return localized === key ? type.replaceAll('_', ' ') : localized;
 }

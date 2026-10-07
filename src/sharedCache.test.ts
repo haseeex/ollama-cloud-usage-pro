@@ -3,25 +3,34 @@ import test from 'node:test';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { UsageResponse } from './api';
+import { UsageSnapshot } from './api';
 import { CacheEntry, FETCH_LOCK_TTL_MS, SharedUsageCache, isCacheFresh } from './sharedCache';
 
-const usage: UsageResponse = {
-  activity: {
-    cost: '0.00000',
-    period: {
-      type: 'last_4_weeks',
-      starting_at: '2026-07-06T00:00:00Z',
-      ending_at: '2026-07-31T01:55:05Z',
-    },
-    models: [],
+const usage: UsageSnapshot = {
+  hourly: {
+    range: '24h',
+    scope: 'self',
+    granularity: 'hour',
+    from: '2026-10-06T01:00:00Z',
+    until: '2026-10-07T01:00:00Z',
+    totals: { request_count: 5 },
+    buckets: [],
   },
-  limits: {
-    session: { usage: 0, models: [] },
-    weekly: {
-      usage: 0.34,
-      models: [{ name: 'glm-5.2', request_count: 740 }],
+  daily: {
+    range: '7d',
+    scope: 'self',
+    granularity: 'day',
+    from: '2026-09-30T00:00:00Z',
+    until: '2026-10-07T01:00:00Z',
+    totals: { request_count: 748 },
+    buckets: [],
+  },
+  balance: {
+    included: {
+      session: { remaining_percent: 92.9, resets_at: '2026-10-07T03:00:00Z' },
+      weekly: { remaining_percent: 92.49, resets_at: '2026-10-12T00:00:00Z' },
     },
+    purchased: { balance_usd: 0 },
   },
 };
 
@@ -75,6 +84,14 @@ test('treats malformed cache files as empty', async () => {
   assert.equal(await cache.read('a'), undefined);
   await cache.write('a', { fetchedAt: 1, intervalMs: 60_000, usage });
   assert.equal((await cache.read('a'))?.fetchedAt, 1);
+});
+
+test('ignores cache files written by an older snapshot version', async () => {
+  const file = await tempFile();
+  await fs.writeFile(file, JSON.stringify({ version: 1, entries: { a: { fetchedAt: 1, intervalMs: 1, usage } } }), 'utf8');
+  const cache = new SharedUsageCache(file);
+
+  assert.equal(await cache.read('a'), undefined);
 });
 
 test('creates the cache directory when missing', async () => {

@@ -1,6 +1,6 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
-import { UsageResponse } from './api';
+import { UsageSnapshot } from './api';
 
 /**
  * A usage snapshot written by whichever VS Code window fetched last.
@@ -15,11 +15,12 @@ export interface CacheEntry {
   fetchedAt: number;
   /** Interval (ms) the fetching window was using. */
   intervalMs: number;
-  usage: UsageResponse;
+  usage: UsageSnapshot;
 }
 
 interface CacheFile {
-  version: 1;
+  /** Bumped when the stored snapshot shape changes so stale files are ignored. */
+  version: 2;
   entries: Record<string, CacheEntry>;
 }
 
@@ -92,13 +93,14 @@ export class SharedUsageCache {
     try {
       const raw = await fs.readFile(this.filePath, 'utf8');
       const parsed = JSON.parse(raw) as CacheFile;
-      if (parsed && typeof parsed === 'object' && parsed.entries && typeof parsed.entries === 'object') {
+      // Older versions stored a different snapshot shape; treat them as absent.
+      if (parsed && parsed.version === 2 && parsed.entries && typeof parsed.entries === 'object') {
         return parsed;
       }
     } catch {
       // A missing or malformed cache is not an error - it just means "no data".
     }
-    return { version: 1, entries: {} };
+    return { version: 2, entries: {} };
   }
 
   private async writeFile(file: CacheFile): Promise<void> {

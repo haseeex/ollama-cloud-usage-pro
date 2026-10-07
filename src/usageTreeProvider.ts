@@ -1,12 +1,20 @@
 import * as vscode from 'vscode';
-import { fetchUsage, LimitUsage, ModelUsage, UsageResponse } from './api';
+import {
+  CreditsIncludedBalance,
+  UsageBucket,
+  UsageMetrics,
+  UsageSnapshot,
+  fetchSnapshot,
+  isLegacyIncluded,
+  parseTimestampMs,
+  sumRequestsInRange,
+} from './api';
 import { AccountStore, AccountsState } from './accountStore';
-import { nextSessionResetMs, nextWeeklyResetMs } from './resetTime';
+import { SESSION_WINDOW_MS, WEEK_MS, windowStartMs } from './resetTime';
 import { SharedUsageCache, isCacheFresh } from './sharedCache';
 import {
   formatDuration,
   formatIntervalSeconds,
-  formatSharePercent,
   formatUsagePercent,
   getRefreshIntervalMs,
   getRefreshIntervalSeconds,
@@ -14,9 +22,9 @@ import {
   t,
   tf,
 } from './config';
-import { getLanguage, tPeriod } from './localization';
-import { estimateRemainingRequests, estimateRemainingRequestsForModel, formatEstimate, modelWindowShare } from './quotaPredictor';
-import { BAR_CELLS, allocateBarCells, barColor } from './barLayout';
+import { getLanguage } from './localization';
+import { estimateRemainingRequests, formatEstimate } from './quotaPredictor';
+import { textBar, usageColor } from './barLayout';
 
 // How long a window waits for the lock holder's fetch before falling back to
 // stale data (or fetching itself when nothing is cached yet).
@@ -49,96 +57,133 @@ class UsageTreeItem extends vscode.TreeItem {
   }
 }
 
-function formatDate(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.valueOf())) {
-    return value;
-  }
-
-  return new Intl.DateTimeFormat(undefined, {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-  }).format(date);
+/** A quota window distilled from the balance endpoint plus the usage buckets. */
+interface WindowSummary {
+  /** Used fraction (0–1), derived from the balance's `remaining_percent`. */
+  used: number;
+  /** Requests recorded inside the current window (from the matching bucket range). */
+  requests: number;
+  /** Epoch ms of the next reset, or 0 when the timestamp is unusable. */
+  resetMs: number;
+  /** Estimated remaining requests at the current pace, when computable. */
+  estimate: number | undefined;
 }
 
-const PERIOD_TYPE_FALLBACK = (type: string): string => type.replaceAll('_', ' ');
-
-function formatPeriodType(type: string): string {
-  const localized = tPeriod(type);
-  return localized ?? PERIOD_TYPE_FALLBACK(type);
+/** Used fraction (0–1) from a legacy balance window's remaining percentage. */
+function usedFraction(remainingPercent: number): number {
+  return Math.max(0, Math.min(1, (100 - remainingPercent) / 100));
 }
 
-function modelNodes(limit: LimitUsage): UsageNode[] {
-  if (!limit.models.length) {
-    return [{ label: t('Models.None'), icon: 'circle-slash' }];
-  }
-
-  return limit.models.map((model) => {
-    const parts = [tf('Models.Requests', model.request_count.toLocaleString())];
-
-    // Share of the window quota (window usage × this model's request share).
-    const share = modelWindowShare(limit, model.request_count);
-    if (share !== undefined) {
-      parts.push(`${formatSharePercent(share)}%`);
-    }
-
-    // Remaining requests if this model were used exclusively.
-    const remaining = estimateRemainingRequestsForModel(limit, model.request_count);
-    if (remaining !== undefined) {
-      parts.push(`≈${formatEstimate(remaining)}`);
-    }
-
-    return {
-      label: model.name,
-      description: parts.join(' · '),
-      icon: 'symbol-method',
-    };
-  });
-}
-
-function limitNode(name: string, limit: LimitUsage): UsageNode {
-  const parts = [tf('Tree.Usage', formatUsagePercent(limit.usage) + '%')];
-  const remaining = estimateRemainingRequests(limit);
-  if (remaining !== undefined) {
-    parts.push(`≈${formatEstimate(remaining)}`);
-  }
-
+/**
+ * Combine one legacy balance window (percent + reset time) with the matching
+ * usage buckets: the window covers [resets_at − windowMs, resets_at), so its
+ * request count is the sum of the overlapping hourly or daily buckets.
+ */
+function summarizeWindow(
+  remainingPercent: number,
+  resetsAt: string,
+  windowMs: number,
+  buckets: UsageBucket[],
+): WindowSummary {
+  const resetMs = parseTimestampMs(resetsAt);
+  const used = usedFraction(remainingPercent);
+  const requests = resetMs ? sumRequestsInRange(buckets, windowStartMs(resetMs, windowMs), resetMs) : 0;
   return {
-    label: name,
-    description: parts.join(' · '),
-    icon: 'dashboard',
-    children: modelNodes(limit),
+    used,
+    requests,
+    resetMs,
+    estimate: estimateRemainingRequests(requests, used),
   };
 }
 
-function usageNodes(usage: UsageResponse): UsageNode[] {
-  const period = usage.activity.period;
+/** ` · $0.05` when the plan reports a cost, otherwise nothing. */
+function costText(metrics: UsageMetrics): string {
+  return metrics.usage_usd === undefined ? '' : tf('Usage.Cost', metrics.usage_usd.toFixed(2));
+}
+
+/** Tree row for one quota window. */
+function windowNode(label: string, summary: WindowSummary): UsageNode {
+  const parts = [tf('Tree.Usage', formatUsagePercent(summary.used) + '%')];
+  if (summary.estimate !== undefined) {
+    parts.push(`≈${formatEstimate(summary.estimate)}`);
+  }
+
+  const reset = summary.resetMs ? formatDuration(summary.resetMs - Date.now()) : '—';
+  return {
+    label,
+    description: parts.join(' · '),
+    icon: 'dashboard',
+    children: [
+      { label: `${t('Panel.ResetIn')}${reset}`, icon: 'clock' },
+      { label: tf('Usage.Requests', summary.requests.toLocaleString()), icon: 'pulse' },
+    ],
+  };
+}
+
+function usageNodes(snapshot: UsageSnapshot): UsageNode[] {
+  const { hourly, daily, balance } = snapshot;
+
+  const activity: UsageNode = {
+    label: t('Tree.Activity'),
+    icon: 'graph',
+    children: [
+      {
+        label: t('Usage.24h'),
+        description: tf('Usage.Requests', hourly.totals.request_count.toLocaleString()) + costText(hourly.totals),
+        icon: 'pulse',
+      },
+      {
+        label: t('Usage.7d'),
+        description: tf('Usage.Requests', daily.totals.request_count.toLocaleString()) + costText(daily.totals),
+        icon: 'calendar',
+      },
+    ],
+  };
+
+  let limitChildren: UsageNode[];
+  if (isLegacyIncluded(balance.included)) {
+    limitChildren = [
+      windowNode(
+        t('Hover.SessionWindow'),
+        summarizeWindow(
+          balance.included.session.remaining_percent,
+          balance.included.session.resets_at,
+          SESSION_WINDOW_MS,
+          hourly.buckets,
+        ),
+      ),
+      windowNode(
+        t('Hover.WeeklyWindow'),
+        summarizeWindow(
+          balance.included.weekly.remaining_percent,
+          balance.included.weekly.resets_at,
+          WEEK_MS,
+          daily.buckets,
+        ),
+      ),
+    ];
+  } else {
+    const included = balance.included;
+    limitChildren = [
+      {
+        label: t('Panel.IncludedCredits'),
+        description: tf('Usage.IncludedShort', included.balance_usd.toFixed(2), included.allowance_usd.toFixed(2)),
+        icon: 'credit-card',
+      },
+      {
+        label: t('Usage.Credits'),
+        description: tf('Usage.Balance', balance.purchased.balance_usd.toFixed(2)),
+        icon: 'wallet',
+      },
+    ];
+  }
+
   return [
-    {
-      label: t('Tree.Activity'),
-      description: tf('Tree.Cost', usage.activity.cost),
-      icon: 'graph',
-      children: [
-        {
-          label: formatPeriodType(period.type),
-          description: `${formatDate(period.starting_at)} – ${formatDate(period.ending_at)}`,
-          tooltip: tf('Tree.FromTo', period.starting_at, period.ending_at),
-          icon: 'calendar',
-        },
-        {
-          label: t('Tree.Models'),
-          icon: 'symbol-class',
-          children: modelNodes({ usage: usage.limits.session.usage, models: usage.activity.models }),
-        },
-      ],
-    },
+    activity,
     {
       label: t('Tree.Limits'),
       icon: 'meter',
-      children: [
-        limitNode(t('Hover.SessionWindow'), usage.limits.session),
-        limitNode(t('Hover.WeeklyWindow'), usage.limits.weekly),
-      ],
+      children: limitChildren,
     },
   ];
 }
@@ -151,107 +196,105 @@ export interface StatusUpdate {
 }
 
 export interface DataUpdate {
-  usage: UsageResponse | undefined;
+  usage: UsageSnapshot | undefined;
   error: string | undefined;
   loading: boolean;
   accounts: AccountsState;
-  sessionResetMs: number;
   lastUpdatedMs: number;
   intervalSeconds: number;
   usagePrecision: number;
   language: string;
 }
 
-// Stacked bar: each model = one shade of blue. Filled cells = window usage %,
-// each model's cells = its share of that filled portion.
-function barSegments(models: ModelUsage[], usage: number): string {
-  if (!models.length) {
-    return '—';
-  }
-  const total = models.reduce((s, m) => s + m.request_count, 0);
-  if (!total) {
-    return '—';
-  }
-
-  const filledTotal = Math.round(BAR_CELLS * Math.max(0, Math.min(1, usage)));
-  const counts = allocateBarCells(models, filledTotal);
-  const cells = models.map((_, index) =>
-    `<font color="${barColor(index)}">${'█'.repeat(counts[index])}</font>`,
-  );
-  cells.push(`<font color="#6e6e6e">${'░'.repeat(Math.max(0, BAR_CELLS - filledTotal))}</font>`);
-  return cells.join('');
-}
-
 function formatClock(ms: number): string {
   return new Intl.DateTimeFormat(undefined, { timeStyle: 'medium' }).format(ms);
 }
 
-/**
- * Per-model detail list, mirroring the Visual Studio extension's hover popup:
- * colour dot, name, share of the window quota, request count, and the
- * remaining-request estimate if that model were used exclusively.
- */
-function modelListMarkdown(limit: LimitUsage): string[] {
-  if (!limit.models.length) {
-    return [`- ${t('Models.None')}`];
-  }
+/** One window section: name, usage % + remaining estimate, colored bar, reset countdown, request count. */
+function windowSection(label: string, summary: WindowSummary): string[] {
+  const remainingText =
+    summary.estimate === undefined ? '' : `　·　${tf('Hover.Remaining', formatEstimate(summary.estimate))}`;
+  const reset = summary.resetMs ? formatDuration(summary.resetMs - Date.now()) : '—';
 
-  return limit.models.map((model, index) => {
-    const color = barColor(index);
-    const parts = [`<font color="${color}">●</font> ${model.name}`];
-
-    const share = modelWindowShare(limit, model.request_count);
-    if (share !== undefined) {
-      parts.push(`${formatSharePercent(share)}%`);
-    }
-
-    parts.push(tf('Models.Requests', model.request_count.toLocaleString()));
-
-    const remaining = estimateRemainingRequestsForModel(limit, model.request_count);
-    if (remaining !== undefined) {
-      parts.push(`≈${formatEstimate(remaining)}`);
-    }
-
-    // A Markdown list item keeps every model on its own line; a bare `\n`
-    // would be treated as a soft break and collapse the whole list into one line.
-    return `- ${parts.join(' · ')}`;
-  });
-}
-
-/** One window section: name, per-model bar, usage %, remaining estimate, reset countdown, model list. */
-function windowSection(label: string, limit: LimitUsage, reset: string): string[] {
-  const remaining = estimateRemainingRequests(limit);
-  const remainingText = remaining === undefined ? '' : `　·　${tf('Hover.Remaining', formatEstimate(remaining))}`;
-
-  // The bar is 40 cells wide and fills the tooltip, so the countdown must be
-  // pushed onto its own line with an explicit `<br>`: a bare `\n` would be a
-  // soft break (collapsed into the same line) and a blank line would split it
-  // into a separate paragraph with an oversized gap.
+  // The bar fills 40 cells and the countdown must land on its own line, so it
+  // is joined with `<br>`: a bare `\n` is a soft break and would collapse the
+  // countdown back onto the bar's line.
   return [
-    `**${label}** — ${formatUsagePercent(limit.usage)}%${remainingText}`,
+    `**${label}** — ${formatUsagePercent(summary.used)}%${remainingText}`,
     '',
-    `${barSegments(limit.models, limit.usage)}<br>*${t('Panel.ResetIn')}${reset}*`,
+    `<font color="${usageColor(summary.used)}">${textBar(summary.used, 1)}</font><br>*${t('Panel.ResetIn')}${reset}*`,
     '',
-    ...modelListMarkdown(limit),
+    `- ${tf('Usage.Requests', summary.requests.toLocaleString())}`,
   ];
 }
 
-function quotaTooltip(usage: UsageResponse, sessionResetMs: number, lastUpdatedMs: number, intervalSeconds: number): vscode.MarkdownString {
-  const now = Date.now();
-  const sReset = sessionResetMs ? formatDuration(sessionResetMs - now) : '—';
-  const wReset = formatDuration(nextWeeklyResetMs(now) - now);
-  const updated = lastUpdatedMs ? tf('Hover.LastUpdated', formatClock(lastUpdatedMs)) : '';
+/** Credit-plan section: included allowance progress and purchased balance. */
+function creditsSection(included: CreditsIncludedBalance, purchasedUsd: number): string[] {
+  const total = included.allowance_usd;
+  const used = total > 0 ? Math.max(0, Math.min(1, (total - included.balance_usd) / total)) : 0;
+  const periodEnd = parseTimestampMs(included.period.until);
+  const reset = periodEnd ? formatDuration(periodEnd - Date.now()) : '—';
+
+  return [
+    `**${t('Panel.IncludedCredits')}** — ${formatUsagePercent(used)}%`,
+    '',
+    `<font color="${usageColor(used)}">${textBar(used, 1)}</font><br>*${t('Panel.ResetIn')}${reset}*`,
+    '',
+    `- ${tf('Usage.Included', included.balance_usd.toFixed(2), total.toFixed(2))}`,
+    `- ${tf('Usage.Balance', purchasedUsd.toFixed(2))}`,
+  ];
+}
+
+function quotaTooltip(snapshot: UsageSnapshot, lastUpdatedMs: number, intervalSeconds: number): vscode.MarkdownString {
+  const { hourly, daily, balance } = snapshot;
 
   const md = new vscode.MarkdownString();
   md.isTrusted = true;
   md.supportHtml = true;
   md.supportThemeIcons = true;
   md.appendMarkdown(`### $(dashboard) ${t('Hover.Title')}\n\n`);
-  md.appendMarkdown(windowSection(t('Hover.SessionWindow'), usage.limits.session, sReset).join('\n'));
-  md.appendMarkdown(`\n\n---\n\n`);
-  md.appendMarkdown(windowSection(t('Hover.WeeklyWindow'), usage.limits.weekly, wReset).join('\n'));
+
+  if (isLegacyIncluded(balance.included)) {
+    const session = summarizeWindow(
+      balance.included.session.remaining_percent,
+      balance.included.session.resets_at,
+      SESSION_WINDOW_MS,
+      hourly.buckets,
+    );
+    md.appendMarkdown(windowSection(t('Hover.SessionWindow'), session).join('\n'));
+    md.appendMarkdown(`\n\n---\n\n`);
+    const weekly = summarizeWindow(
+      balance.included.weekly.remaining_percent,
+      balance.included.weekly.resets_at,
+      WEEK_MS,
+      daily.buckets,
+    );
+    md.appendMarkdown(windowSection(t('Hover.WeeklyWindow'), weekly).join('\n'));
+  } else {
+    md.appendMarkdown(creditsSection(balance.included, balance.purchased.balance_usd).join('\n'));
+  }
+
+  const updated = lastUpdatedMs ? tf('Hover.LastUpdated', formatClock(lastUpdatedMs)) : '';
   md.appendMarkdown(`\n\n${tf('Hover.Refresh', formatIntervalSeconds(intervalSeconds))}${updated}`);
   return md;
+}
+
+/** Status bar text: 5-hour and weekly used percentages for legacy plans. */
+function statusText(snapshot: UsageSnapshot): string {
+  const { balance } = snapshot;
+  if (isLegacyIncluded(balance.included)) {
+    return `$(dashboard) ${tf(
+      'StatusBar.Text',
+      formatUsagePercent(usedFraction(balance.included.session.remaining_percent)),
+      formatUsagePercent(usedFraction(balance.included.weekly.remaining_percent)),
+    )}`;
+  }
+
+  const included = balance.included;
+  const used = included.allowance_usd > 0
+    ? Math.max(0, Math.min(1, (included.allowance_usd - included.balance_usd) / included.allowance_usd))
+    : 0;
+  return `$(dashboard) ${tf('StatusBar.Credits', formatUsagePercent(used))}`;
 }
 
 export class UsageTreeProvider implements vscode.TreeDataProvider<UsageTreeItem> {
@@ -261,11 +304,10 @@ export class UsageTreeProvider implements vscode.TreeDataProvider<UsageTreeItem>
   readonly onDidChangeStatus = this.onDidChangeStatusEmitter.event;
   private readonly onDidChangeDataEmitter = new vscode.EventEmitter<DataUpdate>();
   readonly onDidChangeData = this.onDidChangeDataEmitter.event;
-  private usage: UsageResponse | undefined;
+  private usage: UsageSnapshot | undefined;
   private error: string | undefined;
   private loading = false;
   private accountsState: AccountsState = { accounts: [] };
-  private sessionResetMs = 0;
   private lastUpdatedMs = 0;
   private inFlight: Promise<void> | undefined;
 
@@ -280,7 +322,6 @@ export class UsageTreeProvider implements vscode.TreeDataProvider<UsageTreeItem>
       error: this.error,
       loading: this.loading,
       accounts: this.accountsState,
-      sessionResetMs: this.sessionResetMs,
       lastUpdatedMs: this.lastUpdatedMs,
       intervalSeconds: getRefreshIntervalSeconds(),
       usagePrecision: getUsagePrecision(),
@@ -288,13 +329,13 @@ export class UsageTreeProvider implements vscode.TreeDataProvider<UsageTreeItem>
     };
   }
 
-  getUsage(): UsageResponse | undefined {
+  getUsage(): UsageSnapshot | undefined {
     return this.usage;
   }
 
   buildTooltip(): vscode.MarkdownString {
     if (this.usage) {
-      return quotaTooltip(this.usage, this.sessionResetMs, this.lastUpdatedMs, getRefreshIntervalSeconds());
+      return quotaTooltip(this.usage, this.lastUpdatedMs, getRefreshIntervalSeconds());
     }
     return new vscode.MarkdownString(t('StatusBar.NoData'));
   }
@@ -353,7 +394,7 @@ export class UsageTreeProvider implements vscode.TreeDataProvider<UsageTreeItem>
     this.emitData(this.loading);
   }
 
-  private applyUsage(usage: UsageResponse, fetchedAt: number): void {
+  private applyUsage(usage: UsageSnapshot, fetchedAt: number): void {
     this.usage = usage;
     this.lastUpdatedMs = fetchedAt;
     this.emitStatus();
@@ -364,11 +405,7 @@ export class UsageTreeProvider implements vscode.TreeDataProvider<UsageTreeItem>
       return;
     }
     this.onDidChangeStatusEmitter.fire({
-      text: `$(dashboard) ${tf(
-        'StatusBar.Text',
-        formatUsagePercent(this.usage.limits.session.usage),
-        formatUsagePercent(this.usage.limits.weekly.usage),
-      )}`,
+      text: statusText(this.usage),
       tooltip: this.buildTooltip(),
     });
   }
@@ -379,7 +416,6 @@ export class UsageTreeProvider implements vscode.TreeDataProvider<UsageTreeItem>
       error: this.error,
       loading,
       accounts: this.accountsState,
-      sessionResetMs: this.sessionResetMs,
       lastUpdatedMs: this.lastUpdatedMs,
       intervalSeconds: getRefreshIntervalSeconds(),
       usagePrecision: getUsagePrecision(),
@@ -393,7 +429,6 @@ export class UsageTreeProvider implements vscode.TreeDataProvider<UsageTreeItem>
     this.onDidChangeTreeDataEmitter.fire(undefined);
     this.onDidChangeStatusEmitter.fire({ text: `$(loading~spin) ${t('StatusBar.Loading')}`, tooltip: t('Panel.Loading') });
     this.accountsState = await this.store.load();
-    this.sessionResetMs = nextSessionResetMs(Date.now());
     this.emitData(true);
 
     try {
@@ -436,7 +471,7 @@ export class UsageTreeProvider implements vscode.TreeDataProvider<UsageTreeItem>
       }
 
       try {
-        const usage = await fetchUsage(apiKey);
+        const usage = await fetchSnapshot(apiKey);
         const fetchedAt = Date.now();
         this.applyUsage(usage, fetchedAt);
         await this.cache.write(cacheKey, { fetchedAt, intervalMs, usage });
