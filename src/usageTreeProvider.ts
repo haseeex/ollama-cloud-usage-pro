@@ -1,12 +1,14 @@
 import * as vscode from 'vscode';
 import {
   CreditsIncludedBalance,
+  ModelUsage,
   UsageBucket,
   UsageMetrics,
   UsageSnapshot,
   fetchSnapshot,
   isLegacyIncluded,
   parseTimestampMs,
+  sumModelUsageInRange,
   sumRequestsInRange,
 } from './api';
 import { AccountStore, AccountsState } from './accountStore';
@@ -15,6 +17,7 @@ import { SharedUsageCache, isCacheFresh } from './sharedCache';
 import {
   formatDuration,
   formatIntervalSeconds,
+  formatSharePercent,
   formatUsagePercent,
   getRefreshIntervalMs,
   getRefreshIntervalSeconds,
@@ -23,8 +26,13 @@ import {
   tf,
 } from './config';
 import { getLanguage } from './localization';
-import { estimateRemainingRequests, formatEstimate } from './quotaPredictor';
-import { textBar, usageColor } from './barLayout';
+import {
+  estimateRemainingRequests,
+  estimateRemainingRequestsForModel,
+  formatEstimate,
+  modelWindowShare,
+} from './quotaPredictor';
+import { BAR_CELLS, allocateBarCells, barColor, textBar, usageColor } from './barLayout';
 
 // How long a window waits for the lock holder's fetch before falling back to
 // stale data (or fetching itself when nothing is cached yet).
@@ -67,6 +75,8 @@ interface WindowSummary {
   resetMs: number;
   /** Estimated remaining requests at the current pace, when computable. */
   estimate: number | undefined;
+  /** Per-model request counts inside the window, highest first. */
+  models: ModelUsage[];
 }
 
 /** Used fraction (0–1) from a legacy balance window's remaining percentage. */
@@ -87,18 +97,49 @@ function summarizeWindow(
 ): WindowSummary {
   const resetMs = parseTimestampMs(resetsAt);
   const used = usedFraction(remainingPercent);
-  const requests = resetMs ? sumRequestsInRange(buckets, windowStartMs(resetMs, windowMs), resetMs) : 0;
+  const fromMs = resetMs ? windowStartMs(resetMs, windowMs) : 0;
+  const requests = resetMs ? sumRequestsInRange(buckets, fromMs, resetMs) : 0;
   return {
     used,
     requests,
     resetMs,
     estimate: estimateRemainingRequests(requests, used),
+    models: resetMs ? sumModelUsageInRange(buckets, fromMs, resetMs) : [],
   };
 }
 
 /** ` · $0.05` when the plan reports a cost, otherwise nothing. */
 function costText(metrics: UsageMetrics): string {
   return metrics.usage_usd === undefined ? '' : tf('Usage.Cost', metrics.usage_usd.toFixed(2));
+}
+
+/** Tree rows for one window's models, highest usage first. */
+function modelNodes(summary: WindowSummary): UsageNode[] {
+  if (!summary.models.length) {
+    return [];
+  }
+
+  return summary.models.map((model) => {
+    const parts = [tf('Models.Requests', model.request_count.toLocaleString())];
+
+    // Share of the window quota (window usage × this model's request share).
+    const share = modelWindowShare(summary.used, summary.requests, model.request_count);
+    if (share !== undefined) {
+      parts.push(`${formatSharePercent(share)}%`);
+    }
+
+    // Remaining requests if this model were used exclusively.
+    const remaining = estimateRemainingRequestsForModel(model.request_count, summary.requests, summary.used);
+    if (remaining !== undefined) {
+      parts.push(`≈${formatEstimate(remaining)}`);
+    }
+
+    return {
+      label: model.name,
+      description: parts.join(' · '),
+      icon: 'symbol-method',
+    };
+  });
 }
 
 /** Tree row for one quota window. */
@@ -109,14 +150,23 @@ function windowNode(label: string, summary: WindowSummary): UsageNode {
   }
 
   const reset = summary.resetMs ? formatDuration(summary.resetMs - Date.now()) : '—';
+  const children: UsageNode[] = [
+    { label: `${t('Panel.ResetIn')}${reset}`, icon: 'clock' },
+    { label: tf('Usage.Requests', summary.requests.toLocaleString()), icon: 'pulse' },
+  ];
+  if (summary.models.length) {
+    children.push({
+      label: t('Models.TreeGroup'),
+      icon: 'symbol-class',
+      children: modelNodes(summary),
+    });
+  }
+
   return {
     label,
     description: parts.join(' · '),
     icon: 'dashboard',
-    children: [
-      { label: `${t('Panel.ResetIn')}${reset}`, icon: 'clock' },
-      { label: tf('Usage.Requests', summary.requests.toLocaleString()), icon: 'pulse' },
-    ],
+    children,
   };
 }
 
@@ -210,7 +260,55 @@ function formatClock(ms: number): string {
   return new Intl.DateTimeFormat(undefined, { timeStyle: 'medium' }).format(ms);
 }
 
-/** One window section: name, usage % + remaining estimate, colored bar, reset countdown, request count. */
+/**
+ * Stacked bar: each model = one shade of blue. Filled cells = window usage %,
+ * each model's cells = its share of that filled portion.
+ */
+function barSegments(summary: WindowSummary): string {
+  if (!summary.models.length) {
+    return `<font color="${usageColor(summary.used)}">${textBar(summary.used, 1)}</font>`;
+  }
+
+  const filledTotal = Math.round(BAR_CELLS * Math.max(0, Math.min(1, summary.used)));
+  const counts = allocateBarCells(summary.models, filledTotal);
+  const cells = summary.models.map((_, index) =>
+    `<font color="${barColor(index)}">${'█'.repeat(counts[index])}</font>`,
+  );
+  cells.push(`<font color="#6e6e6e">${'░'.repeat(Math.max(0, BAR_CELLS - filledTotal))}</font>`);
+  return cells.join('');
+}
+
+/**
+ * Per-model detail list: colour dot, name, share of the window quota, request
+ * count, and the remaining-request estimate if that model were used exclusively.
+ */
+function modelListMarkdown(summary: WindowSummary): string[] {
+  if (!summary.models.length) {
+    return [`- ${t('Models.None')}`];
+  }
+
+  return summary.models.map((model, index) => {
+    const parts = [`<font color="${barColor(index)}">●</font> ${model.name}`];
+
+    const share = modelWindowShare(summary.used, summary.requests, model.request_count);
+    if (share !== undefined) {
+      parts.push(`${formatSharePercent(share)}%`);
+    }
+
+    parts.push(tf('Models.Requests', model.request_count.toLocaleString()));
+
+    const remaining = estimateRemainingRequestsForModel(model.request_count, summary.requests, summary.used);
+    if (remaining !== undefined) {
+      parts.push(`≈${formatEstimate(remaining)}`);
+    }
+
+    // A Markdown list item keeps every model on its own line; a bare `\n`
+    // would be treated as a soft break and collapse the list into one line.
+    return `- ${parts.join(' · ')}`;
+  });
+}
+
+/** One window section: header, segmented bar, countdown, request count, model list. */
 function windowSection(label: string, summary: WindowSummary): string[] {
   const remainingText =
     summary.estimate === undefined ? '' : `　·　${tf('Hover.Remaining', formatEstimate(summary.estimate))}`;
@@ -222,9 +320,11 @@ function windowSection(label: string, summary: WindowSummary): string[] {
   return [
     `**${label}** — ${formatUsagePercent(summary.used)}%${remainingText}`,
     '',
-    `<font color="${usageColor(summary.used)}">${textBar(summary.used, 1)}</font><br>*${t('Panel.ResetIn')}${reset}*`,
+    `${barSegments(summary)}<br>*${t('Panel.ResetIn')}${reset}*`,
     '',
     `- ${tf('Usage.Requests', summary.requests.toLocaleString())}`,
+    '',
+    ...modelListMarkdown(summary),
   ];
 }
 

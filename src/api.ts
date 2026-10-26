@@ -19,7 +19,20 @@ export interface UsageMetrics {
   output_tokens?: number;
 }
 
-export interface UsageBucket extends UsageMetrics {
+/** One model's share of a bucket or total, present when `group_by=model` was requested. */
+export interface UsageGroup extends UsageMetrics {
+  model: string;
+}
+
+/** Metrics plus the optional per-model breakdown returned for `group_by=model`. */
+export interface UsageSummary extends UsageMetrics {
+  /** Up to 10 models, ranked by cost (or request count for legacy plans). */
+  groups?: UsageGroup[];
+  /** Combined usage of the models beyond the top 10; omitted when empty. */
+  remainder?: UsageMetrics;
+}
+
+export interface UsageBucket extends UsageSummary {
   from: string;
   until: string;
   partial?: boolean;
@@ -30,10 +43,18 @@ export interface UsageResponse {
   range: string;
   scope: string;
   granularity: string;
+  /** Present only when the request asked for a grouping. */
+  group_by?: string;
   from: string;
   until: string;
-  totals: UsageMetrics;
+  totals: UsageSummary;
   buckets: UsageBucket[];
+}
+
+/** A model's request count aggregated over a time window. */
+export interface ModelUsage {
+  name: string;
+  request_count: number;
 }
 
 /** One legacy quota window (5-hour session or weekly), in percent remaining. */
@@ -113,6 +134,36 @@ export function parseTimestampMs(value: string | undefined): number {
   return Number.isNaN(ms) ? 0 : ms;
 }
 
+/**
+ * Aggregate per-model request counts across every bucket overlapping
+ * `[fromMs, untilMs)`, sorted by request count (descending).
+ *
+ * Used for the 5-hour session window, whose boundaries do not match the
+ * response's own range, so `totals.groups` cannot be reused directly.
+ */
+export function sumModelUsageInRange(buckets: UsageBucket[], fromMs: number, untilMs: number): ModelUsage[] {
+  const totals = new Map<string, number>();
+
+  for (const bucket of buckets) {
+    const bucketFrom = Date.parse(bucket.from);
+    const bucketUntil = Date.parse(bucket.until);
+    if (Number.isNaN(bucketFrom) || Number.isNaN(bucketUntil)) {
+      continue;
+    }
+    if (bucketUntil <= fromMs || bucketFrom >= untilMs) {
+      continue;
+    }
+    for (const group of bucket.groups ?? []) {
+      totals.set(group.model, (totals.get(group.model) ?? 0) + group.request_count);
+    }
+  }
+
+  return [...totals.entries()]
+    .map(([name, request_count]) => ({ name, request_count }))
+    .filter((model) => model.request_count > 0)
+    .sort((a, b) => b.request_count - a.request_count);
+}
+
 export class UsageApiError extends Error {
   constructor(message: string) {
     super(message);
@@ -176,6 +227,39 @@ function parseMetrics(value: unknown, name: string): UsageMetrics {
   return metrics;
 }
 
+function parseGroups(value: unknown, name: string): UsageGroup[] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(value)) {
+    throw new UsageApiError(tf('Err.InvalidField', name));
+  }
+
+  return value.map((group, index) => {
+    const record = asRecord(group, `${name}[${index}]`);
+    return {
+      ...parseMetrics(record, `${name}[${index}]`),
+      model: asString(record.model, `${name}[${index}].model`),
+    };
+  });
+}
+
+/** Parse a totals/bucket payload: metrics plus the optional per-model breakdown. */
+function parseSummary(value: unknown, name: string): UsageSummary {
+  const record = asRecord(value, name);
+  const summary: UsageSummary = parseMetrics(record, name);
+
+  const groups = parseGroups(record.groups, `${name}.groups`);
+  if (groups !== undefined) {
+    summary.groups = groups;
+  }
+  if (record.remainder !== undefined) {
+    summary.remainder = parseMetrics(record.remainder, `${name}.remainder`);
+  }
+
+  return summary;
+}
+
 function parseBuckets(value: unknown, name: string): UsageBucket[] {
   if (!Array.isArray(value)) {
     throw new UsageApiError(tf('Err.InvalidField', name));
@@ -184,7 +268,7 @@ function parseBuckets(value: unknown, name: string): UsageBucket[] {
   return value.map((bucket, index) => {
     const record = asRecord(bucket, `${name}[${index}]`);
     const parsed: UsageBucket = {
-      ...parseMetrics(record, `${name}[${index}]`),
+      ...parseSummary(record, `${name}[${index}]`),
       from: asString(record.from, `${name}[${index}].from`),
       until: asString(record.until, `${name}[${index}].until`),
     };
@@ -198,15 +282,20 @@ function parseBuckets(value: unknown, name: string): UsageBucket[] {
 export function parseUsage(value: unknown): UsageResponse {
   const response = asRecord(value, 'response');
 
-  return {
+  const parsed: UsageResponse = {
     range: asString(response.range, 'range'),
     scope: asString(response.scope, 'scope'),
     granularity: asString(response.granularity, 'granularity'),
     from: asString(response.from, 'from'),
     until: asString(response.until, 'until'),
-    totals: parseMetrics(response.totals, 'totals'),
+    totals: parseSummary(response.totals, 'totals'),
     buckets: parseBuckets(response.buckets, 'buckets'),
   };
+  if (typeof response.group_by === 'string') {
+    parsed.group_by = response.group_by;
+  }
+
+  return parsed;
 }
 
 function parseBalanceWindow(value: unknown, name: string): BalanceWindow {
@@ -303,9 +392,14 @@ function requireKey(apiKey: string): string {
   return key;
 }
 
-export async function fetchUsage(apiKey: string, range: UsageRange = '7d'): Promise<UsageResponse> {
+export async function fetchUsage(
+  apiKey: string,
+  range: UsageRange = '7d',
+  groupBy?: 'model',
+): Promise<UsageResponse> {
   const key = requireKey(apiKey);
-  return parseUsage(await httpGetJson(`${USAGE_URL}?range=${range}`, key));
+  const query = groupBy ? `?range=${range}&group_by=${groupBy}` : `?range=${range}`;
+  return parseUsage(await httpGetJson(`${USAGE_URL}${query}`, key));
 }
 
 export async function fetchBalance(apiKey: string): Promise<BalanceResponse> {
@@ -317,12 +411,15 @@ export async function fetchBalance(apiKey: string): Promise<BalanceResponse> {
  * Fetch everything one refresh needs in parallel: hourly buckets for the
  * 5-hour session window, daily buckets for the weekly window, and the balance
  * that carries the authoritative usage percentages and reset times.
+ *
+ * Both usage calls request `group_by=model` so the per-model breakdown is
+ * available for the windows the extension displays.
  */
 export async function fetchSnapshot(apiKey: string): Promise<UsageSnapshot> {
   const key = requireKey(apiKey);
   const [hourly, daily, balance] = await Promise.all([
-    fetchUsage(key, '24h'),
-    fetchUsage(key, '7d'),
+    fetchUsage(key, '24h', 'model'),
+    fetchUsage(key, '7d', 'model'),
     fetchBalance(key),
   ]);
   return { hourly, daily, balance };

@@ -83,7 +83,17 @@ const EN: Record<string, string> = {
   'Panel.IncludedCredits': 'Included credits',
 
   // Models
+  'Models.None': 'No model requests',
   'Models.Requests': '{0} req.',
+  'Models.WindowShare': '{0}%',
+  'Models.WindowShareTip':
+    "This model accounts for {0}% of the window's quota (window usage {1}% × this model's share of requests)",
+  'Models.Remaining': '· ≈{0} left',
+  'Models.RemainingTip':
+    'If this model were used exclusively: window capacity {0} − requests already made by this model = about {1} more requests left',
+  'Models.TreeGroup': 'Models',
+  'Models.PanelSession': 'Models this window',
+  'Models.PanelWeekly': 'Models this week',
 
   // Cloud usage (documented /api/usage + /api/balance)
   'Usage.24h': 'Last 24 hours',
@@ -200,7 +210,15 @@ const ZH: Record<string, string> = {
   'Panel.IncludedCredits': '包含额度',
 
   // Models
+  'Models.None': '无模型请求',
   'Models.Requests': '{0} 次',
+  'Models.WindowShare': '{0}%',
+  'Models.WindowShareTip': '该模型占用窗口 {0}% 的配额（窗口用量 {1}% × 该模型请求占比）',
+  'Models.Remaining': '· 剩余约 {0} 次',
+  'Models.RemainingTip': '若仅使用该模型：窗口容量 {0} 次 − 该模型已用次数 = 还可请求约 {1} 次',
+  'Models.TreeGroup': '模型',
+  'Models.PanelSession': '本窗口使用的模型',
+  'Models.PanelWeekly': '本周使用的模型',
 
   // Cloud usage (documented /api/usage + /api/balance)
   'Usage.24h': '最近 24 小时',

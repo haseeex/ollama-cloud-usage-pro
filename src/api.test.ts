@@ -6,6 +6,7 @@ import {
   parseBalance,
   parseTimestampMs,
   parseUsage,
+  sumModelUsageInRange,
   sumRequestsInRange,
 } from './api';
 
@@ -144,4 +145,111 @@ test('parseTimestampMs handles bad input', () => {
   assert.equal(parseTimestampMs(undefined), 0);
   assert.equal(parseTimestampMs('nope'), 0);
   assert.equal(parseTimestampMs('2026-10-07T03:00:00Z'), Date.parse('2026-10-07T03:00:00Z'));
+});
+
+// ── group_by=model ──
+
+const groupedUsage = {
+  range: '7d',
+  scope: 'self',
+  granularity: 'day',
+  group_by: 'model',
+  from: '2026-10-19T00:00:00Z',
+  until: '2026-10-26T00:27:30Z',
+  totals: {
+    request_count: 6558,
+    groups: [
+      { model: 'deepseek-v4.1-flash:1017', request_count: 6354 },
+      { model: 'glm-5.3-flash', request_count: 192 },
+      { model: 'gemma4:31b', request_count: 12 },
+    ],
+  },
+  buckets: [
+    {
+      from: '2026-10-19T00:00:00Z',
+      until: '2026-10-20T00:00:00Z',
+      request_count: 239,
+      groups: [{ model: 'deepseek-v4.1-flash:1017', request_count: 239 }],
+    },
+    {
+      from: '2026-10-24T00:00:00Z',
+      until: '2026-10-25T00:00:00Z',
+      request_count: 2638,
+      groups: [
+        { model: 'deepseek-v4.1-flash:1017', request_count: 2434 },
+        { model: 'glm-5.3-flash', request_count: 192 },
+        { model: 'gemma4:31b', request_count: 12 },
+      ],
+    },
+  ],
+};
+
+test('parses the per-model breakdown', () => {
+  const parsed = parseUsage(groupedUsage);
+  assert.equal(parsed.group_by, 'model');
+  assert.equal(parsed.totals.groups?.length, 3);
+  assert.equal(parsed.totals.groups?.[0].model, 'deepseek-v4.1-flash:1017');
+  assert.equal(parsed.totals.groups?.[0].request_count, 6354);
+  assert.equal(parsed.buckets[1].groups?.length, 3);
+});
+
+test('leaves groups undefined when no grouping was requested', () => {
+  const parsed = parseUsage(usage);
+  assert.equal(parsed.group_by, undefined);
+  assert.equal(parsed.totals.groups, undefined);
+  assert.equal(parsed.buckets[0].groups, undefined);
+});
+
+test('parses an optional remainder of the per-model breakdown', () => {
+  const parsed = parseUsage({
+    ...groupedUsage,
+    totals: {
+      request_count: 10,
+      groups: [{ model: 'a', request_count: 8 }],
+      remainder: { request_count: 2 },
+    },
+  });
+  assert.equal(parsed.totals.remainder?.request_count, 2);
+});
+
+test('rejects a malformed group entry', () => {
+  assert.throws(
+    () => parseUsage({ ...groupedUsage, totals: { request_count: 1, groups: [{ request_count: 1 }] } }),
+    UsageApiError,
+  );
+  assert.throws(
+    () => parseUsage({ ...groupedUsage, totals: { request_count: 1, groups: 'nope' } }),
+    UsageApiError,
+  );
+});
+
+test('aggregates per-model counts across buckets in a window', () => {
+  const buckets = parseUsage(groupedUsage).buckets;
+  const models = sumModelUsageInRange(
+    buckets,
+    Date.parse('2026-10-19T00:00:00Z'),
+    Date.parse('2026-10-26T00:00:00Z'),
+  );
+
+  assert.deepEqual(models, [
+    { name: 'deepseek-v4.1-flash:1017', request_count: 239 + 2434 },
+    { name: 'glm-5.3-flash', request_count: 192 },
+    { name: 'gemma4:31b', request_count: 12 },
+  ]);
+});
+
+test('model aggregation narrows to the requested window', () => {
+  const buckets = parseUsage(groupedUsage).buckets;
+  // Only the first bucket overlaps this window.
+  const models = sumModelUsageInRange(
+    buckets,
+    Date.parse('2026-10-19T00:00:00Z'),
+    Date.parse('2026-10-20T00:00:00Z'),
+  );
+  assert.deepEqual(models, [{ name: 'deepseek-v4.1-flash:1017', request_count: 239 }]);
+});
+
+test('model aggregation returns nothing without groups', () => {
+  const buckets = parseUsage(usage).buckets;
+  assert.deepEqual(sumModelUsageInRange(buckets, 0, Number.MAX_SAFE_INTEGER), []);
 });

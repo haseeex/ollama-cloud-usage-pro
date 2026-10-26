@@ -1,19 +1,27 @@
 import * as vscode from 'vscode';
 import {
   CreditsIncludedBalance,
+  ModelUsage,
   UsageBucket,
   UsageMetrics,
   UsageSnapshot,
   isLegacyIncluded,
   parseTimestampMs,
+  sumModelUsageInRange,
   sumRequestsInRange,
 } from './api';
 import { AccountsState } from './accountStore';
 import { DataUpdate } from './usageTreeProvider';
 import { SESSION_WINDOW_MS, WEEK_MS, windowStartMs } from './resetTime';
-import { formatIntervalSeconds, formatUsagePercent, t, tf } from './config';
-import { estimateRemainingRequests, formatEstimate } from './quotaPredictor';
-import { sparkline, usageColor } from './barLayout';
+import { formatIntervalSeconds, formatSharePercent, formatUsagePercent, t, tf } from './config';
+import {
+  estimateRemainingRequests,
+  estimateRemainingRequestsForModel,
+  formatEstimate,
+  modelWindowShare,
+  windowCapacity,
+} from './quotaPredictor';
+import { barColor, sparkline, usageColor } from './barLayout';
 
 function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
@@ -25,6 +33,7 @@ interface WindowSummary {
   requests: number;
   resetMs: number;
   estimate: number | undefined;
+  models: ModelUsage[];
 }
 
 function usedFraction(remainingPercent: number): number {
@@ -39,8 +48,15 @@ function summarizeWindow(
 ): WindowSummary {
   const resetMs = parseTimestampMs(resetsAt);
   const used = usedFraction(remainingPercent);
-  const requests = resetMs ? sumRequestsInRange(buckets, windowStartMs(resetMs, windowMs), resetMs) : 0;
-  return { used, requests, resetMs, estimate: estimateRemainingRequests(requests, used) };
+  const fromMs = resetMs ? windowStartMs(resetMs, windowMs) : 0;
+  const requests = resetMs ? sumRequestsInRange(buckets, fromMs, resetMs) : 0;
+  return {
+    used,
+    requests,
+    resetMs,
+    estimate: estimateRemainingRequests(requests, used),
+    models: resetMs ? sumModelUsageInRange(buckets, fromMs, resetMs) : [],
+  };
 }
 
 /** Single-colour usage bar with the used percentage. */
@@ -49,8 +65,55 @@ function barHtml(used: number): string {
   return `<div class="bar"><div class="fill" style="width:${width}%;background:${usageColor(used)}"></div></div>`;
 }
 
-/** One quota window row: label, used %, bar, reset countdown, request count. */
-function windowRowHtml(label: string, summary: WindowSummary): string {
+/**
+ * Segmented usage bar: the filled portion is split between models by request
+ * share, each model in its own blue shade.
+ */
+function segmentsHtml(summary: WindowSummary): string {
+  if (!summary.models.length) {
+    return barHtml(summary.used);
+  }
+  const fillWidth = Math.max(0, Math.min(1, summary.used)) * 100;
+  const total = summary.models.reduce((sum, model) => sum + model.request_count, 0);
+  if (total <= 0) {
+    return barHtml(summary.used);
+  }
+  const segs = summary.models.map((model, index) => {
+    const width = (model.request_count / total) * fillWidth;
+    return `<div class="seg" style="width:${width}%;background:${barColor(index)}" data-name="${escapeHtml(model.name)}" data-count="${escapeHtml(tf('Models.Requests', model.request_count.toLocaleString()))}"></div>`;
+  }).join('');
+  return `<div class="bar">${segs}</div>`;
+}
+
+/** Per-model detail list: colour dot, name, share of window quota, requests, remaining. */
+function modelListHtml(summary: WindowSummary): string {
+  if (!summary.models.length) {
+    return `<div class="empty">${t('Models.None')}</div>`;
+  }
+
+  return summary.models.map((model, index) => {
+    const share = modelWindowShare(summary.used, summary.requests, model.request_count);
+    const shareHtml = share === undefined
+      ? ''
+      : `<span class="model-share" title="${escapeHtml(tf('Models.WindowShareTip', formatSharePercent(share), formatUsagePercent(summary.used)))}">${escapeHtml(tf('Models.WindowShare', formatSharePercent(share)))}</span>`;
+
+    const remaining = estimateRemainingRequestsForModel(model.request_count, summary.requests, summary.used);
+    const remainingHtml = remaining === undefined
+      ? ''
+      : `<span class="model-remain" title="${escapeHtml(tf('Models.RemainingTip', formatEstimate(windowCapacity(summary.requests, summary.used) ?? 0), formatEstimate(remaining)))}">${escapeHtml(tf('Models.Remaining', formatEstimate(remaining)))}</span>`;
+
+    return `<div class="model">
+      <span class="dot" style="color:${barColor(index)}">●</span>
+      <span class="model-name">${escapeHtml(model.name)}</span>
+      ${shareHtml}
+      <span class="model-count">${escapeHtml(tf('Models.Requests', model.request_count.toLocaleString()))}</span>
+      ${remainingHtml}
+    </div>`;
+  }).join('');
+}
+
+/** One quota window row: label, used %, bar, reset countdown, request count, models. */
+function windowRowHtml(label: string, summary: WindowSummary, modelsLabel: string): string {
   const remaining = summary.estimate === undefined
     ? ''
     : `<span class="row-remain">${escapeHtml(tf('Panel.Remaining', formatEstimate(summary.estimate)))}</span>`;
@@ -59,9 +122,13 @@ function windowRowHtml(label: string, summary: WindowSummary): string {
       <span class="row-label">${label}</span>
       <span class="row-right">${remaining}<span class="row-pct">${escapeHtml(tf('Panel.Used', formatUsagePercent(summary.used)))}</span></span>
     </div>
-    ${barHtml(summary.used)}
+    ${segmentsHtml(summary)}
     <div class="reset">${t('Panel.ResetIn')}<span data-reset-at="${summary.resetMs}">…</span></div>
     <div class="row-count">${escapeHtml(tf('Usage.Requests', summary.requests.toLocaleString()))}</div>
+    <div class="group">
+      <div class="group-label">${modelsLabel}</div>
+      <div class="models">${modelListHtml(summary)}</div>
+    </div>
   </div>`;
 }
 
@@ -146,9 +213,9 @@ function bodyHtml(data: DataUpdate): string {
       usage.daily.buckets,
     );
     content = `
-    ${windowRowHtml(t('Panel.SessionWindow'), session)}
+    ${windowRowHtml(t('Panel.SessionWindow'), session, t('Models.PanelSession'))}
     <div class="spacer"></div>
-    ${windowRowHtml(t('Panel.WeeklyWindow'), weekly)}
+    ${windowRowHtml(t('Panel.WeeklyWindow'), weekly, t('Models.PanelWeekly'))}
     ${chartHtml(t('Usage.HourlyTitle'), usage.hourly.buckets)}
     ${chartHtml(t('Usage.DailyTitle'), usage.daily.buckets)}`;
   } else {
@@ -178,8 +245,9 @@ const CSS = `
   .row-pct { font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
   .reset { font-size: 11px; color: var(--vscode-descriptionForeground); margin-top: 4px; font-variant-numeric: tabular-nums; }
   .row-count { font-size: 11px; color: var(--vscode-descriptionForeground); margin-top: 2px; font-variant-numeric: tabular-nums; }
-  .bar { background: var(--vscode-scrollbarSlider-background); border-radius: 6px; height: 6px; overflow: hidden; }
+  .bar { background: var(--vscode-scrollbarSlider-background); border-radius: 6px; height: 6px; overflow: hidden; display: flex; }
   .fill { height: 6px; transition: width .3s ease; }
+  .seg { height: 6px; transition: width .3s ease; cursor: default; }
   .chart { font-family: monospace; font-size: 13px; line-height: 1.2; letter-spacing: 0.5px; color: var(--vscode-charts-blue, #2563eb); overflow: hidden; white-space: nowrap; }
   .chart-meta { font-size: 11px; color: var(--vscode-descriptionForeground); margin-top: 4px; font-variant-numeric: tabular-nums; }
   #tip { display: none; position: fixed; z-index: 10; background: var(--vscode-editorHoverWidget-background); color: var(--vscode-editorHoverWidget-foreground); border: 1px solid var(--vscode-editorHoverWidget-border); border-radius: 4px; padding: 6px 8px; font-size: 12px; font-variant-numeric: tabular-nums; pointer-events: none; box-shadow: 0 2px 8px rgba(0,0,0,.3); }
@@ -187,6 +255,7 @@ const CSS = `
   .spacer { height: 20px; }
   .group-label { font-size: 11px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px; color: var(--vscode-descriptionForeground); margin-bottom: 8px; }
   .models { display: flex; flex-direction: column; gap: 6px; }
+  .empty { font-size: 12px; color: var(--vscode-descriptionForeground); }
   .model { display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 3px 0; }
   .dot { font-size: 10px; line-height: 1; }
   .model-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
